@@ -189,11 +189,16 @@ def _mrz_check_digit(field: str) -> int:
 
 
 def _parse_dob_from_mrz(dob_field: str) -> Optional[date]:
-    """Parse YYMMDD from MRZ. Years >= 10 → 19xx, < 10 → 20xx."""
+    """Parse YYMMDD from MRZ with dynamic pivot year.
+
+    If yy > current two-digit year → person born in 19xx (must be adult).
+    Otherwise → 20xx. This correctly handles e.g. yy=15 as 2015, not 1915.
+    """
     if len(dob_field) < 6 or not dob_field[:6].isdigit():
         return None
     yy, mm, dd = int(dob_field[0:2]), int(dob_field[2:4]), int(dob_field[4:6])
-    year = 1900 + yy if yy >= 10 else 2000 + yy
+    current_yy = date.today().year % 100
+    year = 1900 + yy if yy > current_yy else 2000 + yy
     try:
         return date(year, mm, dd)
     except ValueError:
@@ -206,14 +211,40 @@ def _is_18_plus(dob: date) -> bool:
     return age >= 18
 
 
+def _heal_dob_field(dob_raw: str, expected_check: int) -> Optional[str]:
+    """Iteratively replace OCR-confused letters with digits until checksum matches.
+
+    Common Tesseract confusions: O↔0, S↔5, I↔1, Z↔2, B↔8, G↔6, T↔1.
+    """
+    SUBSTITUTIONS = {"O": "0", "S": "5", "I": "1", "Z": "2", "B": "8", "G": "6", "T": "1"}
+    candidates = [dob_raw]
+    seen: set[str] = {dob_raw}
+    for candidate in candidates:
+        for idx, ch in enumerate(candidate):
+            if ch in SUBSTITUTIONS:
+                healed = candidate[:idx] + SUBSTITUTIONS[ch] + candidate[idx + 1:]
+                if healed not in seen:
+                    seen.add(healed)
+                    if _mrz_check_digit(healed) == expected_check:
+                        logger.info("MRZ self-heal: '%s' → '%s'", dob_raw, healed)
+                        return healed
+                    candidates.append(healed)
+    return None
+
+
 def _extract_td3(line1: str, line2: str) -> Optional[dict]:
     if len(line2) < 44:
         return None
     dob_raw   = line2[13:19]
     dob_check = line2[19]
-    if dob_check.isdigit() and _mrz_check_digit(dob_raw) != int(dob_check):
-        logger.warning("MRZ TD-3: bad DOB check digit")
-        return None
+    if dob_check.isdigit():
+        if _mrz_check_digit(dob_raw) != int(dob_check):
+            healed = _heal_dob_field(dob_raw, int(dob_check))
+            if healed:
+                dob_raw = healed
+            else:
+                logger.warning("MRZ TD-3: bad DOB check digit — self-heal failed")
+                return None
     expiry_raw  = line2[21:27]
     nationality = line2[10:13].replace("<", "")
     doc_number  = line2[0:9].replace("<", "")
@@ -244,9 +275,14 @@ def _extract_td1(line1: str, line2: str, line3: str) -> Optional[dict]:
         return None
     dob_raw   = line2[0:6]
     dob_check = line2[6]
-    if dob_check.isdigit() and _mrz_check_digit(dob_raw) != int(dob_check):
-        logger.warning("MRZ TD-1: bad DOB check digit")
-        return None
+    if dob_check.isdigit():
+        if _mrz_check_digit(dob_raw) != int(dob_check):
+            healed = _heal_dob_field(dob_raw, int(dob_check))
+            if healed:
+                dob_raw = healed
+            else:
+                logger.warning("MRZ TD-1: bad DOB check digit — self-heal failed")
+                return None
     expiry_raw  = line2[8:14]
     nationality = line2[15:18].replace("<", "")
     doc_number  = line1[5:14].replace("<", "")
@@ -282,6 +318,43 @@ def _preprocess_for_mrz(img: np.ndarray) -> np.ndarray:
     enhanced  = clahe.apply(blackhat)
     _, thresh = cv2.threshold(enhanced, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
     return thresh
+
+
+def _retesseract_dob_segment(preprocessed: np.ndarray, dob_raw: str, pytesseract) -> str:
+    """Re-OCR only the 6-char DOB slice with digits-only whitelist.
+
+    Called when the first pass produced a dob_raw that contains letters.
+    Estimates the horizontal position of the DOB field by scanning for the
+    first row whose width matches an MRZ line and extracting the known offset.
+    Returns the corrected 6-char string, or the original if nothing improves.
+    """
+    if dob_raw.isdigit():
+        return dob_raw
+
+    h, w = preprocessed.shape[:2]
+    # MRZ characters are roughly equal width; TD3 line is 44 chars, TD1 is 30.
+    # For TD3 line2: DOB starts at char 13, for TD1 line2: DOB starts at char 0.
+    # We attempt a narrow horizontal strip around where DOB digits should sit.
+    # Since we don't know TD type yet, try both offsets and keep the best hit.
+    char_w = w // 44  # approximate character width for TD3
+    for dob_start_char, line_len in [(13, 44), (0, 30)]:
+        cw = w // line_len
+        x1 = dob_start_char * cw
+        x2 = x1 + 6 * cw
+        x1, x2 = max(0, x1), min(w, x2)
+        strip = preprocessed[:, x1:x2]
+        if strip.size == 0:
+            continue
+        raw = pytesseract.image_to_string(
+            strip,
+            config="--psm 7 -c tessedit_char_whitelist=0123456789",
+        )
+        digits = re.sub(r"\D", "", raw)
+        if len(digits) >= 6:
+            candidate = digits[:6]
+            logger.info("Digit-only re-OCR for DOB: '%s' → '%s'", dob_raw, candidate)
+            return candidate
+    return dob_raw
 
 
 def _run_fast_mrz(id_back_bytes: bytes) -> Optional[dict]:
@@ -343,6 +416,34 @@ def _run_fast_mrz(id_back_bytes: bytes) -> Optional[dict]:
     except Exception as exc:
         logger.warning("mrz library pass failed: %s", exc)
 
+    # Third attempt: digit-only re-OCR on the DOB segment for each candidate line.
+    # Fixes cases where Tesseract put letters in the YYMMDD field on the first pass.
+    lines = [l for l in raw_text.splitlines() if len(l) >= 30]
+    for i in range(len(lines) - 1):
+        l2 = lines[i + 1]
+        # TD3: DOB at chars 13-18
+        if len(l2) >= 44:
+            raw_dob = l2[13:19]
+            if not raw_dob.isdigit():
+                fixed = _retesseract_dob_segment(preprocessed, raw_dob, pytesseract)
+                l2_fixed = l2[:13] + fixed + l2[19:]
+                r = _extract_td3(lines[i], l2_fixed)
+                if r:
+                    logger.info("MRZ TD-3 parsed via digit-only DOB re-pass")
+                    return r
+    for i in range(len(lines) - 2):
+        l2 = lines[i + 1]
+        # TD1: DOB at chars 0-5
+        if len(l2) >= 30:
+            raw_dob = l2[0:6]
+            if not raw_dob.isdigit():
+                fixed = _retesseract_dob_segment(preprocessed, raw_dob, pytesseract)
+                l2_fixed = fixed + l2[6:]
+                r = _extract_td1(lines[i], l2_fixed, lines[i + 2])
+                if r:
+                    logger.info("MRZ TD-1 parsed via digit-only DOB re-pass")
+                    return r
+
     logger.warning("Fast Path MRZ: no valid DOB found — Gemma gate required")
     return None
 
@@ -375,12 +476,17 @@ def _enhance_image_for_face(id_front_bytes: bytes) -> bytes:
 
 
 def _run_gemma_ocr(id_front_bytes: bytes) -> dict:
-    """Use Gemma 4 to extract DOB from ID Front image."""
-    logger.warning("MRZ Fast Path failed — running Gemma 4 OCR on ID Front for DOB")
+    """Use Gemma 4 to extract DOB from ID Front image.
+
+    Calls verify_dob() which uses a focused prompt that explicitly instructs
+    the model to locate the 'Datum rojstva' / 'Date of birth' label on the
+    front of the document — more reliable than the generic OCR prompt.
+    """
+    logger.warning("MRZ Fast Path failed — running Gemma 4 focused DOB extraction on ID Front")
     from engine import VeritasEngine
     engine = VeritasEngine()
     try:
-        return engine.verify(id_front_bytes)
+        return engine.verify_dob(id_front_bytes)
     finally:
         del engine
 

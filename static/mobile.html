@@ -76,25 +76,42 @@ html,body{background:var(--bg);color:var(--text);font-family:-apple-system,Blink
 .cutout-face::after{
   content:'';position:absolute;
   top:6%;left:18%;right:18%;bottom:6%;
-  border:2.5px solid rgba(255,255,255,.78);
   border-radius:50%;
-  box-shadow:0 0 0 9999px rgba(0,0,0,.52);
+  box-shadow:0 0 0 9999px rgba(0,0,0,.62);
 }
 
-/* ── countdown ring ── */
-.countdown-wrap{
+/* ── Face-ID style ring ── */
+.faceid-ring-wrap{
   position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
   pointer-events:none;z-index:5;
 }
-.countdown-ring{display:none}
-.countdown-ring svg{transform:rotate(-90deg)}
-.countdown-ring circle.track{fill:none;stroke:rgba(255,255,255,.18);stroke-width:5}
-.countdown-ring circle.prog {fill:none;stroke:var(--blue);stroke-width:5;stroke-linecap:round;
-  transition:stroke-dashoffset .1s linear}
-.countdown-num{
-  position:absolute;font-size:2rem;font-weight:700;color:#fff;
-  text-shadow:0 2px 8px rgba(0,0,0,.6);letter-spacing:-.04em;
+.faceid-ring-svg{
+  position:absolute;
+  /* size matches the oval cutout: left:18% right:18% → 64% of container width */
+  width:64%;
+  /* keep it square so it stays circular */
+  aspect-ratio:1/1;
 }
+/* dashed tick ring (static background) */
+.faceid-ring-svg .tick-ring{
+  fill:none;stroke:rgba(255,255,255,.28);
+  stroke-width:6;
+  stroke-dasharray:4 8;
+  stroke-linecap:round;
+}
+/* animated progress arc on top */
+.faceid-ring-svg .prog-arc{
+  fill:none;stroke:var(--blue);
+  stroke-width:6;stroke-linecap:round;
+  transition:stroke-dashoffset .08s linear,stroke .3s;
+  transform:rotate(-90deg);transform-origin:50% 50%;
+}
+.faceid-ring-svg .prog-arc.done{stroke:var(--green)}
+
+/* ── countdown ring (legacy, hidden) ── */
+.countdown-wrap{display:none}
+.countdown-ring{display:none}
+.countdown-num{display:none}
 
 /* ── flash overlay ── */
 .flash{
@@ -122,17 +139,20 @@ html,body{background:var(--bg);color:var(--text);font-family:-apple-system,Blink
   display:none;z-index:7;
 }
 
-/* ── liveness angle chips ── */
-.liveness-row{display:flex;justify-content:center;gap:.45rem;margin-bottom:.8rem;flex-wrap:wrap}
-.angle-chip{
-  display:flex;flex-direction:column;align-items:center;gap:.18rem;
-  background:var(--card2);border-radius:.75rem;padding:.42rem .6rem;
-  font-size:.62rem;color:var(--muted);border:1.5px solid var(--border);
-  transition:background .25s,border-color .25s,color .25s;min-width:50px;
+/* ── liveness angle chips — hidden, replaced by ring UI ── */
+.liveness-row{display:none}
+.angle-chip{display:none}
+
+/* ── liveness instruction below viewfinder ── */
+.liveness-instruction{
+  text-align:center;font-size:1.05rem;font-weight:600;letter-spacing:-.02em;
+  color:#fff;line-height:1.4;margin:.55rem 0 .25rem;min-height:2.6em;
+  transition:opacity .2s;
 }
-.angle-chip.active{background:rgba(0,113,227,.2);border-color:var(--blue);color:var(--blue)}
-.angle-chip.done  {background:rgba(52,199,89,.15);border-color:var(--green);color:var(--green)}
-.angle-chip svg{width:18px;height:18px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.liveness-step-counter{
+  text-align:center;font-size:.72rem;color:var(--muted);margin-bottom:.65rem;
+  letter-spacing:.04em;
+}
 
 /* ── liveness auto banner ── */
 .liveness-auto-banner{
@@ -322,51 +342,41 @@ html,body{background:var(--bg);color:var(--text);font-family:-apple-system,Blink
       Camera will start automatically. Follow each prompt — frames are captured for you.
     </div>
 
-    <!-- angle progress chips -->
+    <!-- hidden chips kept for JS compat -->
     <div class="liveness-row">
-      <div class="angle-chip" id="chip0">
-        <svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M12 14v6"/><path d="M9 20h6"/></svg>
-        <span>Straight</span>
-      </div>
-      <div class="angle-chip" id="chip1">
-        <svg viewBox="0 0 24 24"><circle cx="12" cy="10" r="4"/><path d="m8 6 4-4 4 4"/></svg>
-        <span>Left</span>
-      </div>
-      <div class="angle-chip" id="chip2">
-        <svg viewBox="0 0 24 24"><circle cx="12" cy="10" r="4"/><path d="m16 6-4-4-4 4"/></svg>
-        <span>Right</span>
-      </div>
-      <div class="angle-chip" id="chip3">
-        <svg viewBox="0 0 24 24"><circle cx="12" cy="9" r="4"/><path d="m8 5 4-4 4 4"/></svg>
-        <span>Up</span>
-      </div>
-      <div class="angle-chip" id="chip4">
-        <svg viewBox="0 0 24 24"><circle cx="12" cy="15" r="4"/><path d="m8 19 4 4 4-4"/></svg>
-        <span>Down</span>
-      </div>
+      <div class="angle-chip" id="chip0"><span>Straight</span></div>
+      <div class="angle-chip" id="chip1"><span>Left</span></div>
+      <div class="angle-chip" id="chip2"><span>Right</span></div>
+      <div class="angle-chip" id="chip3"><span>Up</span></div>
+      <div class="angle-chip" id="chip4"><span>Down</span></div>
     </div>
 
-    <div class="vf-wrap" id="vfSelfie" style="height:72vw;max-height:360px">
+    <!-- Face-ID style viewfinder — square so oval is a true circle -->
+    <div class="vf-wrap" id="vfSelfie" style="height:92vw;max-height:420px;background:#000">
       <video id="vidSelfie" autoplay playsinline muted></video>
       <img  id="stillSelfie" class="vf-still" alt=""/>
       <div class="cutout-face"></div>
 
-      <!-- countdown ring sits inside the oval -->
-      <div class="countdown-wrap">
-        <div class="countdown-ring" id="countdownRing">
-          <svg width="80" height="80" viewBox="0 0 80 80">
-            <circle class="track" cx="40" cy="40" r="34"/>
-            <circle class="prog"  cx="40" cy="40" r="34" id="countdownArc"
-              stroke-dasharray="213.6" stroke-dashoffset="213.6"/>
-          </svg>
-          <div class="countdown-num" id="countdownNum">2</div>
-        </div>
+      <!-- Face-ID tick ring -->
+      <div class="faceid-ring-wrap">
+        <svg class="faceid-ring-svg" viewBox="0 0 200 200" id="faceidRingSvg">
+          <circle class="tick-ring" cx="100" cy="100" r="90"/>
+          <circle class="prog-arc"  cx="100" cy="100" r="90"
+            id="faceidArc"
+            stroke-dasharray="565.5"
+            stroke-dashoffset="565.5"/>
+        </svg>
       </div>
 
+      <div class="countdown-wrap"></div>
       <div class="vf-hint" id="hintSelfie">Starting camera…</div>
       <div class="vf-captured-badge" id="badgeSelfie">✓ Done</div>
       <div class="flash" id="flashSelfie"></div>
     </div>
+
+    <!-- instruction text below viewfinder -->
+    <div class="liveness-instruction" id="livenessInstruction">&nbsp;</div>
+    <div class="liveness-step-counter" id="livenessCounter"></div>
 
     <!-- shown only while sequence is not yet running -->
     <button class="btn btn-primary" id="btnStartLiveness" onclick="startLivenessSequence()" style="display:none">
@@ -498,6 +508,7 @@ async function openDocCam(key) {
     streams[key] = stream;
     vid.srcObject = stream;
     vid.style.display = 'block';
+    await vid.play().catch(e => console.warn('Autoplay blocked:', e));
     document.getElementById(hintId).textContent    = 'Fit card inside the frame, then tap Capture';
     document.getElementById(capBtnId).disabled     = false;
     document.getElementById(openBtnId).textContent = 'Retake';
@@ -564,8 +575,12 @@ async function _initLiveness() {
   document.getElementById('nextToStep3').style.display   = 'none';
   document.getElementById('badgeSelfie').style.display   = 'none';
   document.getElementById('btnStartLiveness').style.display = 'none';
-  document.getElementById('countdownRing').style.display = 'none';
   document.getElementById('hintSelfie').textContent      = 'Starting front camera…';
+  document.getElementById('livenessInstruction').innerHTML = '&nbsp;';
+  document.getElementById('livenessCounter').textContent  = '';
+  // Reset ring
+  const arc = document.getElementById('faceidArc');
+  if (arc) { arc.style.strokeDashoffset = '565.5'; arc.classList.remove('done'); }
 
   // Open front camera
   _stopStream('selfie');
@@ -583,11 +598,14 @@ async function _initLiveness() {
     vid.srcObject = stream;
     vid.style.display = 'block';
     document.getElementById('stillSelfie').style.display = 'none';
+    await vid.play().catch(e => console.warn('Autoplay blocked:', e));
 
     // Wait for first frame before starting
     await new Promise(resolve => {
+      if (vid.readyState >= 2) { resolve(); return; }
       const onPlay = () => { vid.removeEventListener('playing', onPlay); resolve(); };
       vid.addEventListener('playing', onPlay);
+      setTimeout(resolve, 2000); // fallback in case playing never fires
     });
 
     document.getElementById('hintSelfie').textContent = 'Keep your face inside the oval';
@@ -607,80 +625,74 @@ async function startLivenessSequence() {
   if (livenessRunning) return;
   livenessRunning = true;
   document.getElementById('btnStartLiveness').style.display = 'none';
-  document.getElementById('livenessBanner').textContent = 'Follow each prompt — hold still for 2 seconds';
+  document.getElementById('livenessBanner').style.display   = 'none';
 
-  const vid      = document.getElementById('vidSelfie');
-  const arc      = document.getElementById('countdownArc');
-  const numEl    = document.getElementById('countdownNum');
-  const ring     = document.getElementById('countdownRing');
-  const hintEl   = document.getElementById('hintSelfie');
-  const flashEl  = document.getElementById('flashSelfie');
-  const badgeEl  = document.getElementById('badgeSelfie');
+  const vid         = document.getElementById('vidSelfie');
+  const arc         = document.getElementById('faceidArc');
+  const instrEl     = document.getElementById('livenessInstruction');
+  const counterEl   = document.getElementById('livenessCounter');
+  const hintEl      = document.getElementById('hintSelfie');
+  const badgeEl     = document.getElementById('badgeSelfie');
 
-  for (let i = 0; i < LIVENESS_ANGLES.length; i++) {
+  // Full circumference of r=90 circle
+  const CIRC = 2 * Math.PI * 90; // ≈ 565.5
+
+  hintEl.style.display = 'none';
+
+  // Per-step arc: divide full circle into N equal slices
+  const N         = LIVENESS_ANGLES.length;
+  const sliceSize = CIRC / N;
+
+  for (let i = 0; i < N; i++) {
     const angle = LIVENESS_ANGLES[i];
 
-    // Mark chip active
-    LIVENESS_ANGLES.forEach((_, j) => {
-      document.getElementById('chip' + j).className =
-        j < i ? 'angle-chip done' : j === i ? 'angle-chip active' : 'angle-chip';
-    });
+    // Update instruction text
+    instrEl.innerHTML = angle.instruction;
+    counterEl.textContent = `${i + 1} of ${N}`;
 
-    hintEl.innerHTML = angle.instruction;
-
-    // Animate countdown ring for COUNTDOWN_SECS
-    ring.style.display = 'block';
-    const tickMs   = 50;
-    const totalMs  = COUNTDOWN_SECS * 1000;
-    let   elapsed  = 0;
+    // Arc starts where previous step ended (filled so far)
+    const filledSoFar = sliceSize * i;
+    // During this step we animate from filledSoFar → filledSoFar + sliceSize
+    const tickMs  = 50;
+    const totalMs = COUNTDOWN_SECS * 1000;
+    let   elapsed = 0;
 
     await new Promise(resolve => {
       const timer = setInterval(() => {
         elapsed += tickMs;
-        const remaining = Math.max(0, COUNTDOWN_SECS - elapsed / 1000);
-        numEl.textContent = Math.ceil(remaining);
-
-        // Stroke offset: full circle = 0, empty = CIRCUMFERENCE
-        arc.style.strokeDashoffset =
-          String(CIRCUMFERENCE * (elapsed / totalMs));
-
-        if (elapsed >= totalMs) {
-          clearInterval(timer);
-          resolve();
-        }
+        const progress     = Math.min(elapsed / totalMs, 1);
+        const filled       = filledSoFar + sliceSize * progress;
+        // dashoffset: CIRC = empty, 0 = full
+        arc.style.strokeDashoffset = String(CIRC - filled);
+        if (elapsed >= totalMs) { clearInterval(timer); resolve(); }
       }, tickMs);
     });
 
-    // Auto-capture this angle
+    // Auto-capture
     const cnv = document.createElement('canvas');
     cnv.width  = vid.videoWidth  || 1280;
     cnv.height = vid.videoHeight || 720;
     cnv.getContext('2d').drawImage(vid, 0, 0, cnv.width, cnv.height);
-
     await new Promise(resolve => {
-      cnv.toBlob(blob => {
-        selfieBlobs[i] = blob;
-        resolve();
-      }, 'image/jpeg', 0.92);
+      cnv.toBlob(blob => { selfieBlobs[i] = blob; resolve(); }, 'image/jpeg', 0.92);
     });
 
-    // Flash + mark chip done
     _triggerFlash('flashSelfie');
-    document.getElementById('chip' + i).className = 'angle-chip done';
-
-    // Reset ring for next angle
-    arc.style.strokeDashoffset = String(CIRCUMFERENCE);
-    numEl.textContent = String(COUNTDOWN_SECS);
 
     // Brief pause between angles
-    if (i < LIVENESS_ANGLES.length - 1) await _sleep(400);
+    if (i < N - 1) await _sleep(350);
   }
 
-  // All done
-  ring.style.display = 'none';
+  // Final state — full green ring
+  arc.style.strokeDashoffset = '0';
+  arc.classList.add('done');
+
+  instrEl.innerHTML   = 'All done!';
+  counterEl.textContent = '';
+
   _stopStream('selfie');
 
-  // Freeze last captured frame as still
+  // Freeze last frame
   if (selfieBlobs[selfieBlobs.length - 1]) {
     const still = document.getElementById('stillSelfie');
     still.src   = URL.createObjectURL(selfieBlobs[selfieBlobs.length - 1]);
@@ -688,11 +700,9 @@ async function startLivenessSequence() {
     document.getElementById('vidSelfie').style.display = 'none';
   }
 
-  hintEl.style.display = 'none';
   badgeEl.style.display = 'block';
-  document.getElementById('livenessBanner').textContent = '✓ All 5 angles captured successfully';
-  document.getElementById('nextToStep3').style.display  = 'block';
-  document.getElementById('nextToStep3').disabled       = false;
+  document.getElementById('nextToStep3').style.display = 'block';
+  document.getElementById('nextToStep3').disabled      = false;
   livenessRunning = false;
 }
 
@@ -708,7 +718,9 @@ function goStep(n) {
   });
   document.getElementById(['screen0','screen1','screen2','screen3'][n]).classList.add('active');
   window.scrollTo(0, 0);
-  if (n === 2) _initLiveness();
+  if (n === 0) openDocCam('idFront');
+  else if (n === 1) openDocCam('idBack');
+  else if (n === 2) _initLiveness();
 }
 
 /* ═══════════════════════════════════════════════════════════

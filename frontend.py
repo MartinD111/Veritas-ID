@@ -39,6 +39,22 @@ def _get_lan_ip() -> str:
 
 
 _LAN_IP = _get_lan_ip()
+
+
+def _get_ngrok_url() -> str | None:
+    """Return the first active ngrok HTTPS public URL, or None if not running."""
+    try:
+        r = requests.get("http://127.0.0.1:4040/api/tunnels", timeout=1.5)
+        tunnels = r.json().get("tunnels", [])
+        for t in tunnels:
+            url = t.get("public_url", "")
+            if url.startswith("https://"):
+                return url.rstrip("/")
+    except Exception:
+        pass
+    return None
+
+
 POLL_INTERVAL = 2
 MAX_POLLS = 60
 CONFIG_FILE = pathlib.Path(__file__).parent / ".veritas_config.json"
@@ -77,10 +93,6 @@ if "dark_mode" not in st.session_state:
     st.session_state.dark_mode = _cfg.get("dark_mode", False)
 if "show_settings" not in st.session_state:
     st.session_state.show_settings = False
-if "result" not in st.session_state:
-    st.session_state.result = None
-if "task_id" not in st.session_state:
-    st.session_state.task_id = None
 if "qr_png_bytes" not in st.session_state:
     st.session_state.qr_png_bytes = None
 if "qr_mobile_url" not in st.session_state:
@@ -88,7 +100,7 @@ if "qr_mobile_url" not in st.session_state:
 if "qr_session_label" not in st.session_state:
     st.session_state.qr_session_label = None
 if "public_base_url" not in st.session_state:
-    st.session_state.public_base_url = _cfg.get("public_base_url", "")
+    st.session_state.public_base_url = ""
 
 dm = st.session_state.dark_mode
 
@@ -149,6 +161,9 @@ def svg_moon():
 def svg_file_badge():
     return f'<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="{MUTED}" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M12 13a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/><path d="M8 21v-1a4 4 0 0 1 8 0v1"/></svg>'
 
+def svg_sun():
+    return f'<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="{MUTED}" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>'
+
 # ── CSS ───────────────────────────────────────────────────────────────────────
 st.markdown(f"""
 <style>
@@ -171,25 +186,31 @@ html, body, [class*="css"], .stApp {{
 }}
 
 /* ── Settings button fixed top-right ── */
-.v-settings-fab {{
+.v-settings-fab, .v-theme-fab {{
     position: fixed;
     top: 1.5rem;
-    right: 1.5rem;
     z-index: 999;
-    width: 48px;
-    height: 48px;
-    background: {CARD};
-    border-radius: 50%;
-    box-shadow: {SHADOW};
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    cursor: pointer;
-    transition: transform 0.2s ease, box-shadow 0.2s ease;
-    border: none;
-    outline: none;
 }}
-.v-settings-fab:hover {{ transform: scale(1.08); box-shadow: {SHADOW_HV}; }}
+.v-settings-fab {{ right: 1.5rem; }}
+.v-theme-fab    {{ right: 5rem; }}
+
+.v-settings-fab button, .v-theme-fab button {{
+    width: 48px !important;
+    height: 48px !important;
+    background: {CARD} !important;
+    border-radius: 50% !important;
+    box-shadow: {SHADOW} !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    cursor: pointer !important;
+    transition: transform 0.2s ease, box-shadow 0.2s ease !important;
+    border: none !important;
+    font-size: 1.4rem !important;
+    padding: 0 !important;
+    color: {TEXT} !important;
+}}
+.v-settings-fab button:hover, .v-theme-fab button:hover {{ transform: scale(1.08) !important; box-shadow: {SHADOW_HV} !important; }}
 
 /* ── Modal overlay ── */
 .v-modal-overlay {{
@@ -223,20 +244,25 @@ html, body, [class*="css"], .stApp {{
     position: absolute;
     top: 1.5rem;
     right: 1.5rem;
-    width: 32px;
-    height: 32px;
-    background: {INPUT_BG};
-    border-radius: 50%;
-    border: none;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: {MUTED};
-    font-size: 1rem;
-    transition: background 0.2s;
+    z-index: 1001;
 }}
-.v-modal-close:hover {{ background: {INPUT_HV}; }}
+.v-modal-close button {{
+    width: 32px !important;
+    height: 32px !important;
+    min-width: 32px !important;
+    background: {INPUT_BG} !important;
+    border-radius: 50% !important;
+    border: none !important;
+    cursor: pointer !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    color: {MUTED} !important;
+    font-size: 0.9rem !important;
+    padding: 0 !important;
+    transition: background 0.2s !important;
+}}
+.v-modal-close button:hover {{ background: {INPUT_HV} !important; }}
 
 /* Dark mode toggle row */
 .v-toggle-row {{
@@ -562,20 +588,20 @@ _engine_status = _get_engine_status()
 # autorefresh removed – it caused constant screen flickering.
 # Engine status updates on manual page reload or after a verification completes.
 
-# ── Settings FAB (fixed top-right via HTML) ───────────────────────────────────
-st.markdown(f"""
-<div class="v-settings-fab" onclick="window.location.href='?settings=1'" title="Nastavitve" id="settings-fab">
-    {svg_settings()}
-</div>
-""", unsafe_allow_html=True)
+# ── Top-right Actions ────────────────────────────────────────────────────────
+st.markdown('<div class="v-theme-fab">', unsafe_allow_html=True)
+theme_icon = "☀️" if st.session_state.dark_mode else "🌙"
+if st.button(theme_icon, key="theme_toggle_btn", help="Preklopi temno/svetlo"):
+    st.session_state.dark_mode = not st.session_state.dark_mode
+    save_config({"dark_mode": st.session_state.dark_mode})
+    st.rerun()
+st.markdown('</div>', unsafe_allow_html=True)
 
-# Detect settings open via a Streamlit button hidden off-screen (actual toggle)
-# We use a real st.button for interactivity, styled to look like the FAB
-_, fab_col = st.columns([20, 1])
-with fab_col:
-    if st.button("⚙", key="settings_fab_btn", help="Nastavitve"):
-        st.session_state.show_settings = not st.session_state.show_settings
-        st.rerun()
+st.markdown('<div class="v-settings-fab">', unsafe_allow_html=True)
+if st.button("⚙", key="settings_fab_btn", help="Nastavitve"):
+    st.session_state.show_settings = not st.session_state.show_settings
+    st.rerun()
+st.markdown('</div>', unsafe_allow_html=True)
 
 # ── Header ────────────────────────────────────────────────────────────────────
 st.markdown(f"""
@@ -588,280 +614,165 @@ st.markdown(f"""
 
 # ── Settings modal ─────────────────────────────────────────────────────────────
 if st.session_state.show_settings:
+    st.markdown('<div class="v-modal-overlay">', unsafe_allow_html=True)
+    st.markdown('<div class="v-modal">', unsafe_allow_html=True)
+    
+    # Close button "X"
+    st.markdown('<div class="v-modal-close">', unsafe_allow_html=True)
+    if st.button("✕", key="close_settings_x", help="Zapri"):
+        st.session_state.show_settings = False
+        st.rerun()
+    st.markdown('</div>', unsafe_allow_html=True)
+    
+    st.markdown('<div class="v-modal-title">Nastavitve</div>', unsafe_allow_html=True)
+
+    st.markdown(f'<div class="v-settings-label">{svg_key()} &nbsp;API Avtentikacija</div>', unsafe_allow_html=True)
+    new_key = st.text_input(
+        "API Key",
+        value=st.session_state.api_key,
+        type="password",
+        placeholder="vrt_...",
+        key="settings_api_key_input",
+        label_visibility="collapsed"
+    )
+    st.markdown('<p class="v-help-text">Ključ se shranjuje lokalno in se uporablja za avtentikacijo na Veritas omrežje.</p>', unsafe_allow_html=True)
+
+    if new_key != st.session_state.api_key:
+        st.session_state.api_key = new_key
+        save_config({"api_key": new_key})
+
     st.markdown(f"""
-    <div class="v-modal-overlay">
-        <div class="v-modal">
-            <div class="v-modal-title">Nastavitve</div>
+    <div class="v-toggle-row">
+        <div class="v-toggle-left">
+            <div class="v-toggle-icon">{svg_moon()}</div>
+            <div>
+                <div class="v-toggle-label">Temni način</div>
+                <div class="v-toggle-sub">Prilagodi videz vmesnika</div>
+            </div>
         </div>
     </div>
     """, unsafe_allow_html=True)
 
-    with st.container():
-        st.markdown(f"""
-        <div style="
-            background:{CARD};
-            border-radius:2rem;
-            box-shadow:0 24px 60px rgba(0,0,0,0.25);
-            padding:2.5rem;
-            max-width:440px;
-            margin:0 auto 2rem auto;
-            position:relative;
-        ">
-            <div style="font-size:1.5rem;font-weight:600;letter-spacing:-0.03em;color:{TEXT};margin-bottom:2rem;">Nastavitve</div>
-            <div class="v-settings-label">{svg_key()} &nbsp;API Avtentikacija</div>
-        </div>
-        """, unsafe_allow_html=True)
+    dm_label = "🌙 Temni način: VKLOPLJEN" if dm else "☀️ Temni način: IZKLOPLJEN"
+    if st.toggle(dm_label, value=dm, key="dark_mode_toggle"):
+        if not st.session_state.dark_mode:
+            st.session_state.dark_mode = True
+            save_config({"dark_mode": True})
+            st.rerun()
+    else:
+        if st.session_state.dark_mode:
+            st.session_state.dark_mode = False
+            save_config({"dark_mode": False})
+            st.rerun()
 
-        _, center_col, _ = st.columns([1, 4, 1])
-        with center_col:
-            close_col, _ = st.columns([1, 6])
-            with close_col:
-                if st.button("✕ Zapri", key="close_settings"):
-                    st.session_state.show_settings = False
-                    st.rerun()
-
-            st.markdown(f'<div class="v-settings-label">{svg_key()} &nbsp;API Avtentikacija</div>', unsafe_allow_html=True)
-
-            new_key = st.text_input(
-                "API Key",
-                value=st.session_state.api_key,
-                type="password",
-                placeholder="vrt_...",
-                key="settings_api_key_input",
-            )
-            st.markdown(f'<p class="v-help-text">Ključ se shranjuje lokalno in se uporablja za avtentikacijo na Veritas omrežje.</p>', unsafe_allow_html=True)
-
-            if new_key != st.session_state.api_key:
-                st.session_state.api_key = new_key
-                save_config({"api_key": new_key})
-
-            st.markdown(f"""
-            <div class="v-toggle-row">
-                <div class="v-toggle-left">
-                    <div class="v-toggle-icon">{svg_moon()}</div>
-                    <div>
-                        <div class="v-toggle-label">Temni način</div>
-                        <div class="v-toggle-sub">Prilagodi videz vmesnika</div>
-                    </div>
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
-
-            dm_label = "🌙 Temni način: VKLOPLJEN" if dm else "☀️ Temni način: IZKLOPLJEN"
-            if st.toggle(dm_label, value=dm, key="dark_mode_toggle"):
-                if not st.session_state.dark_mode:
-                    st.session_state.dark_mode = True
-                    save_config({"dark_mode": True})
-                    st.rerun()
-            else:
-                if st.session_state.dark_mode:
-                    st.session_state.dark_mode = False
-                    save_config({"dark_mode": False})
-                    st.rerun()
-
-    st.divider()
+    st.markdown('</div>', unsafe_allow_html=True) # close v-modal
+    st.markdown('</div>', unsafe_allow_html=True) # close v-modal-overlay
 
 # ── Main layout ───────────────────────────────────────────────────────────────
 left_col, right_col = st.columns([8, 4], gap="large")
 
 with left_col:
-    tab_desktop, tab_mobile = st.tabs(["💻  Desktop Upload", "📱  Mobile QR Flow"])
-
-    # ── Desktop upload tab ────────────────────────────────────────────────
-    with tab_desktop:
-        st.markdown(f"""
-        <div class="v-card">
-            <div class="v-section-head">
-                <h2>Identifikacijski podatki</h2>
-                {svg_file_badge()}
-            </div>
-            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:1rem;">
-                <div class="v-upload-zone">
-                    {svg_id_card()}
-                    <div class="v-upload-title">Dokument – Spredaj</div>
-                    <div class="v-upload-sub">Naloži sliko (JPG, PNG)</div>
-                </div>
-                <div class="v-upload-zone">
-                    {svg_id_card()}
-                    <div class="v-upload-title">Dokument – Zadaj (MRZ)</div>
-                    <div class="v-upload-sub">Naloži sliko (JPG, PNG)</div>
-                </div>
-                <div class="v-upload-zone">
-                    {svg_camera()}
-                    <div class="v-upload-title">Selfie obraz</div>
-                    <div class="v-upload-sub">Za primerjavo (Opcijsko)</div>
-                </div>
-            </div>
+    st.markdown(f"""
+    <div class="v-card">
+        <div class="v-section-head">
+            <h2>Mobilni tok z QR kodo</h2>
+            {svg_camera()}
         </div>
-        """, unsafe_allow_html=True)
+        <p style="font-size:.9rem;color:{MUTED};margin-bottom:1.25rem;">
+            Ustvari enkratno QR sejo. Stranka skenira QR s telefonom,
+            naredi selfie, fotografira obe strani dokumenta in po želji
+            prebere NFC čip.
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
 
-        up_col1, up_col2, up_col3 = st.columns(3, gap="medium")
-        with up_col1:
-            id_file = st.file_uploader(
-                "Dokument – Spredaj",
-                type=["jpg", "jpeg", "png", "webp"],
-                label_visibility="collapsed",
-                key="id_uploader",
-            )
-            if id_file:
-                st.image(id_file, use_container_width=True)
-
-        with up_col2:
-            id_back_file = st.file_uploader(
-                "Dokument – Zadaj",
-                type=["jpg", "jpeg", "png", "webp"],
-                label_visibility="collapsed",
-                key="id_back_uploader",
-            )
-            if id_back_file:
-                st.image(id_back_file, use_container_width=True)
-
-        with up_col3:
-            selfie_file = st.camera_input(
-                "Selfie",
-                label_visibility="collapsed",
-                key="selfie_input",
-            )
-
-    # ── Mobile QR tab ─────────────────────────────────────────────────────
-    with tab_mobile:
-        st.markdown(f"""
-        <div class="v-card">
-            <div class="v-section-head">
-                <h2>Mobilni tok z QR kodo</h2>
-                {svg_camera()}
-            </div>
-            <p style="font-size:.9rem;color:{MUTED};margin-bottom:1.25rem;">
-                Ustvari enkratno QR sejo. Stranka skenira QR s telefonom,
-                naredi selfie, fotografira obe strani dokumenta in po želji
-                prebere NFC čip.
-            </p>
-        </div>
-        """, unsafe_allow_html=True)
-
-        # Auto-detected LAN IP – user can still override
-        default_url = f"http://{_LAN_IP}:8000"
-        mobile_server = st.text_input(
-            "URL strežnika (dostopen s telefona – samodejno zaznano)",
-            value=st.session_state.get("mobile_server_url", default_url),
-            placeholder=default_url,
-            key="mobile_server_url_input",
+    ngrok_url = _get_ngrok_url()
+    if ngrok_url:
+        st.session_state.public_base_url = ngrok_url
+        st.success(f"✅ Varen ngrok tunel zaznan: `{ngrok_url}`")
+    else:
+        st.session_state.public_base_url = ""
+        st.warning(
+            "⚠️ **ngrok ni zaznan.** Zaženi ngrok (`ngrok http 8000`) in znova naloži stran. "
+            "Brez HTTPS kamere na telefonu ne delujejo.",
         )
-        if mobile_server != st.session_state.get("mobile_server_url", ""):
-            st.session_state["mobile_server_url"] = mobile_server
-            save_config({"mobile_server_url": mobile_server})
 
-        st.caption(f"Zaznani LAN IP: `{_LAN_IP}` — FastAPI mora teči z `--host 0.0.0.0 --port 8000`")
+    has_public_url = bool(ngrok_url)
 
-        public_url = st.text_input(
-            "Public Base URL (e.g. ngrok)",
-            value=st.session_state.public_base_url,
-            placeholder="https://a1b2-c3d4.ngrok-free.app",
-            key="public_base_url_input",
-            help="If set, the QR code will point to this URL instead of the LAN IP. Leave empty to use the LAN address above.",
-        )
-        if public_url != st.session_state.public_base_url:
-            st.session_state.public_base_url = public_url
-            save_config({"public_base_url": public_url})
-        has_public_url = bool(public_url.strip())
-        if has_public_url:
-            st.caption(f"QR will use: `{public_url.rstrip('/')}`")
+    gen_qr = st.button(
+        "Generiraj QR kodo",
+        type="primary",
+        disabled=not st.session_state.api_key.strip() or not has_public_url,
+        use_container_width=True,
+        key="gen_qr_btn",
+    )
+
+    if gen_qr:
+        if not _QR_AVAILABLE:
+            st.error("Knjižnica `qrcode` ni nameščena. Zaženi: `pip install qrcode[pil]`")
         else:
-            st.warning(
-                "⚠️ **Public URL required.** Camera access needs HTTPS. "
-                "Enter your ngrok URL above before generating the QR code.",
-                icon=None,
-            )
+            st.session_state.qr_png_bytes     = None
+            st.session_state.qr_mobile_url    = None
+            st.session_state.qr_session_label = None
 
-        gen_qr = st.button(
-            "Generiraj QR kodo",
-            type="primary",
-            disabled=not st.session_state.api_key.strip() or not has_public_url,
-            use_container_width=True,
-            key="gen_qr_btn",
+            try:
+                qr_resp = requests.post(
+                    f"{BACKEND_URL}/mobile/session",
+                    headers={"X-API-Key": st.session_state.api_key.strip()},
+                    timeout=10,
+                )
+                qr_resp.raise_for_status()
+                payload    = qr_resp.json()
+                session_id = payload["session_id"]
+                expires_in = payload.get("expires_in", 600)
+            except requests.exceptions.ConnectionError:
+                st.error("Strežnik ni dosegljiv na `localhost:8000`. Preveri, ali FastAPI teče.")
+                st.stop()
+            except Exception as exc:
+                st.error(f"Napaka pri ustvarjanju seje: {exc}")
+                st.error(traceback.format_exc())
+                st.stop()
+
+            mobile_url = f"{ngrok_url.rstrip('/')}/mobile/{session_id}"
+
+            try:
+                qr = qrcode.QRCode(
+                    version=None,
+                    error_correction=qrcode.constants.ERROR_CORRECT_M,
+                    box_size=8,
+                    border=3,
+                )
+                qr.add_data(mobile_url)
+                qr.make(fit=True)
+                pil_img = qr.make_image(fill_color="black", back_color="white")
+                buf = io.BytesIO()
+                pil_img.save(buf, format="PNG")
+                st.session_state.qr_png_bytes     = buf.getvalue()
+                st.session_state.qr_mobile_url    = mobile_url
+                st.session_state.qr_session_label = f"Velja {expires_in // 60} min · seja: {session_id[:12]}…"
+            except Exception as exc:
+                st.warning(f"QR slika ni bila ustvarjena ({exc}) — uporabi spodnjo povezavo.")
+                st.error(traceback.format_exc())
+                st.session_state.qr_mobile_url = mobile_url
+            st.rerun()
+
+    if st.session_state.get("qr_mobile_url"):
+        st.markdown("**Mobilna povezava** (kopiraj ali skeniraj QR):")
+        st.code(st.session_state.qr_mobile_url, language=None)
+    if st.session_state.get("qr_png_bytes"):
+        st.image(
+            st.session_state.qr_png_bytes,
+            caption=st.session_state.get("qr_session_label") or "",
+            width=260,
         )
-
-        if gen_qr:
-            if not _QR_AVAILABLE:
-                st.error("Knjižnica `qrcode` ni nameščena. Zaženi: `pip install qrcode[pil]`")
-            else:
-                # Clear any previous QR from session state
-                st.session_state.qr_png_bytes    = None
-                st.session_state.qr_mobile_url   = None
-                st.session_state.qr_session_label = None
-
-                # Step 1: get session_id from backend
-                try:
-                    qr_resp = requests.post(
-                        f"{BACKEND_URL}/mobile/session",
-                        headers={"X-API-Key": st.session_state.api_key.strip()},
-                        timeout=10,
-                    )
-                    qr_resp.raise_for_status()
-                    payload    = qr_resp.json()
-                    session_id = payload["session_id"]
-                    expires_in = payload.get("expires_in", 600)
-                except requests.exceptions.ConnectionError:
-                    st.error("Strežnik ni dosegljiv na `localhost:8000`. Preveri, ali FastAPI teče.")
-                    st.stop()
-                except Exception as exc:
-                    st.error(f"Napaka pri ustvarjanju seje: {exc}")
-                    st.error(traceback.format_exc())
-                    st.stop()
-
-                _base = st.session_state.public_base_url.strip().rstrip('/') or mobile_server.rstrip('/')
-                mobile_url = f"{_base}/mobile/{session_id}"
-
-                # Step 2: render QR into bytes and store in session_state
-                try:
-                    qr = qrcode.QRCode(
-                        version=None,
-                        error_correction=qrcode.constants.ERROR_CORRECT_M,
-                        box_size=8,
-                        border=3,
-                    )
-                    qr.add_data(mobile_url)
-                    qr.make(fit=True)
-                    pil_img = qr.make_image(fill_color="black", back_color="white")
-                    buf = io.BytesIO()
-                    pil_img.save(buf, format="PNG")
-                    st.session_state.qr_png_bytes     = buf.getvalue()
-                    st.session_state.qr_mobile_url    = mobile_url
-                    st.session_state.qr_session_label = f"Velja {expires_in // 60} min · seja: {session_id[:12]}…"
-                except Exception as exc:
-                    st.warning(f"QR slika ni bila ustvarjena ({exc}) — uporabi spodnjo povezavo.")
-                    st.error(traceback.format_exc())
-                    st.session_state.qr_mobile_url = mobile_url
-                # Rerun immediately so the render block executes on a clean pass
-                st.rerun()
-
-        # Render QR from session_state – always visible, survives reruns
-        if st.session_state.get("qr_mobile_url"):
-            st.markdown("**Mobilna povezava** (kopiraj ali skeniraj QR):")
-            st.code(st.session_state.qr_mobile_url, language=None)
-        if st.session_state.get("qr_png_bytes"):
-            st.image(
-                st.session_state.qr_png_bytes,
-                caption=st.session_state.get("qr_session_label") or "",
-                width=260,
-            )
-            st.info("Po skeniranju QR se mobilna aplikacija odpre v brskalniku telefona.")
-            if st.button("Počisti / nova seja", key="clear_qr_btn"):
-                st.session_state.qr_png_bytes     = None
-                st.session_state.qr_mobile_url    = None
-                st.session_state.qr_session_label = None
-                st.rerun()
-
-    # Desktop tab sets these; mobile tab leaves them None so submit is skipped
-    if "id_file" not in dir():
-        id_file = None
-    if "id_back_file" not in dir():
-        id_back_file = None
-    if "selfie_file" not in dir():
-        selfie_file = None
+        st.info("Po skeniranju QR se mobilna aplikacija odpre v brskalniku telefona.")
+        if st.button("Počisti / nova seja", key="clear_qr_btn"):
+            st.session_state.qr_png_bytes     = None
+            st.session_state.qr_mobile_url    = None
+            st.session_state.qr_session_label = None
+            st.rerun()
 
 with right_col:
-    # Engine status
     if _engine_status == "ready":
         dot_class   = "green"
         status_text = "AI motor je pripravljen in aktiven"
@@ -883,7 +794,6 @@ with right_col:
     </div>
     """, unsafe_allow_html=True)
 
-    # Inline API key entry if missing
     if not st.session_state.api_key:
         st.markdown(f'<div class="v-settings-label">{svg_key()} &nbsp;API Ključ</div>', unsafe_allow_html=True)
         inline_key = st.text_input(
@@ -899,151 +809,6 @@ with right_col:
             save_config({"api_key": inline_key})
             st.rerun()
 
-    has_key  = bool(st.session_state.api_key.strip())
-    has_doc  = id_file is not None
-    has_back = id_back_file is not None
-
-    submit = st.button(
-        "🔒  Zaženi verifikacijo",
-        type="primary",
-        disabled=(not has_key or not has_doc or not has_back),
-        use_container_width=True,
-        key="verify_btn",
-    )
-
-    if not has_key:
+    if not st.session_state.api_key.strip():
         st.markdown(f'<p class="v-warning">Manjka API ključ. Dodajte ga zgoraj ali v nastavitvah (⚙).</p>', unsafe_allow_html=True)
-    elif not has_doc or not has_back:
-        st.markdown(f'<p class="v-warning">Naloži sprednji in zadnji del dokumenta za nadaljevanje.</p>', unsafe_allow_html=True)
 
-# ── Verification flow ─────────────────────────────────────────────────────────
-if submit:
-    st.session_state.result = None
-    st.session_state.task_id = None
-
-    prog = st.empty()
-
-    def _progress(icon: str, title: str, sub: str, pct: int):
-        prog.markdown(f"""
-        <div class="v-loading">
-            <div style="font-size:2rem;margin-bottom:0.75rem">{icon}</div>
-            <div class="v-loading-title">{title}</div>
-            <div class="v-loading-sub">{sub}</div>
-            <div class="v-progress-track">
-                <div style="width:{pct}%;height:100%;background:{BLUE};border-radius:999px;transition:width 0.8s cubic-bezier(0.65,0,0.35,1)"></div>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
-
-    _progress("📡", "Kriptiranje in prenos...", "Priprava multipart zahteve", 15)
-
-    headers = {"X-API-Key": st.session_state.api_key.strip()}
-    files: dict = {
-        "id_document": (id_file.name, id_file.getvalue(), id_file.type),
-        "id_back": (id_back_file.name, id_back_file.getvalue(), id_back_file.type),
-    }
-    if selfie_file:
-        files["selfie"] = ("selfie.jpg", selfie_file.getvalue(), "image/jpeg")
-
-    try:
-        resp = requests.post(f"{BACKEND_URL}/verify", headers=headers, files=files, timeout=15)
-    except requests.exceptions.ConnectionError:
-        prog.error("**Strežnik ni dosegljiv.** Preveri, ali FastAPI teče na `localhost:8000`.", icon="🔌")
-        st.stop()
-    except requests.exceptions.Timeout:
-        prog.error("Zahteva je potekla (timeout 15 s). Poskusi znova.", icon="⏱️")
-        st.stop()
-
-    if resp.status_code == 401:
-        prog.error("**Neveljaven API ključ.** Preveri vrednost v nastavitvah.", icon="🔑")
-        st.stop()
-    elif not resp.ok:
-        prog.error(f"Napaka strežnika ({resp.status_code}):\n```\n{resp.text}\n```")
-        st.stop()
-
-    task_id = resp.json().get("task_id")
-    if not task_id:
-        prog.error(f"Strežnik ni vrnil `task_id`:\n```json\n{resp.text}\n```")
-        st.stop()
-
-    st.session_state.task_id = task_id
-    _progress("🧠", "Analiza dokumenta...", f"Gemma 4 procesira sliko v RAM-u · task: {task_id[:8]}…", 45)
-
-    result = None
-    for poll_num in range(1, MAX_POLLS + 1):
-        time.sleep(POLL_INTERVAL)
-        try:
-            poll_resp = requests.get(f"{BACKEND_URL}/verify/status/{task_id}", headers=headers, timeout=10)
-        except requests.exceptions.RequestException as exc:
-            prog.error(f"Napaka pri anketiranju: {exc}", icon="🔌")
-            st.stop()
-
-        if not poll_resp.ok:
-            prog.error(f"Anketiranje vrnilo {poll_resp.status_code}:\n```\n{poll_resp.text}\n```")
-            st.stop()
-
-        payload = poll_resp.json()
-        task_status = payload.get("state", "PENDING")
-        pct = min(45 + poll_num * 2, 90)
-        _progress("🔍", "Preverjanje varnostnih elementov...", f"[{poll_num}/{MAX_POLLS}] Status: {task_status}", pct)
-
-        if task_status == "SUCCESS":
-            result = payload.get("result", {})
-            break
-        elif task_status in ("FAILURE", "REVOKED"):
-            prog.error(f"Naloga se je končala z **{task_status}**.\n```json\n{payload}\n```", icon="💥")
-            st.stop()
-    else:
-        prog.warning(f"Naloga `{task_id}` ni bila zaključena v {MAX_POLLS * POLL_INTERVAL} s. Poskusi znova.")
-        st.stop()
-
-    _progress("✅", "Verifikacija zaključena", "Rezultati so pripravljeni", 100)
-    time.sleep(0.4)
-    prog.empty()
-    st.session_state.result = result
-
-# ── Results ───────────────────────────────────────────────────────────────────
-if st.session_state.result:
-    result  = st.session_state.result
-    task_id = st.session_state.task_id
-    status  = result.get("status")
-
-    if status == "approved":
-        cls, ico, title, sub = "success", "✓", "Identiteta potrjena", "Varnostni pregledi so bili uspešno zaključeni."
-    elif status == "manual_review":
-        cls, ico, title, sub = "manual", "⚠", "Ročni pregled potreben", "Avtomatska verifikacija ni bila zaključena."
-    else:
-        cls, ico, title, sub = "error", "✕", "Verifikacija zavrnjena", "Identitete ni bilo mogoče potrditi."
-
-    st.markdown(f"""
-    <div class="v-result-card">
-        <div class="v-result-header">
-            <div class="v-result-icon {cls}">{ico}</div>
-            <h2>{title}</h2>
-            <p>{sub}</p>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-
-    user_name    = result.get("user_name") or "—"
-    age_verified = result.get("age_verified")
-    face_match   = result.get("face_match")
-
-    def _bool_html(val, true_text, false_text):
-        if val is True:
-            return f'<div class="v-metric-value green">{true_text}</div>'
-        elif val is False:
-            return f'<div class="v-metric-value red">{false_text}</div>'
-        return f'<div class="v-metric-value">N/A</div>'
-
-    m1, m2, m3 = st.columns(3, gap="medium")
-    with m1:
-        st.markdown(f'<div class="v-metric-card"><div class="v-metric-label">Ime in priimek</div><div class="v-metric-value">{user_name}</div></div>', unsafe_allow_html=True)
-    with m2:
-        st.markdown(f'<div class="v-metric-card"><div class="v-metric-label">Polnoletnost (18+)</div>{_bool_html(age_verified, "Potrjena", "Ni potrjena")}</div>', unsafe_allow_html=True)
-    with m3:
-        st.markdown(f'<div class="v-metric-card"><div class="v-metric-label">Ujemanje obraza</div>{_bool_html(face_match, "Potrjeno", "Ni ujemanja")}</div>', unsafe_allow_html=True)
-
-    st.markdown("<br>", unsafe_allow_html=True)
-    with st.expander("Pokaži surove podatke (JSON)"):
-        st.json({"task_id": task_id, "task_status": "SUCCESS", "task_result": result})

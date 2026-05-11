@@ -41,6 +41,31 @@ Pravila:
 
 _USER_PROMPT_ID_ONLY = "Izvleci besedilne podatke iz osebnega dokumenta na sliki. Vrni JSON."
 
+_USER_PROMPT_DOB_FOCUSED = (
+    "Na sliki je sprednja stran osebnega dokumenta (osebna izkaznica ali potni list). "
+    "Tvoja EDINA naloga je najti datum rojstva.\n\n"
+    "Navodila:\n"
+    "1. Poišči polje z napisom 'Datum rojstva', 'Date of birth', 'Dátum narodenia', "
+    "'Geburtsdatum', 'Fecha de nacimiento' ali katerim koli enakovrednim besedilom v "
+    "katerem koli jeziku – napis je vedno tik ob datumu.\n"
+    "2. Preberi datum v obliki DD.MM.LLLL (dan.mesec.leto s štirimi ciframi za leto).\n"
+    "3. Preveri, ali je oseba stara 18 let ali več glede na danes.\n"
+    "4. Vrni SAMO veljavni JSON brez kakršnega koli drugega besedila:\n"
+    "{\n"
+    '  "status": "approved|rejected|manual_review",\n'
+    '  "user_name": "<ime in priimek iz dokumenta>",\n'
+    '  "age_verified": true|false,\n'
+    '  "ocr_data": {\n'
+    '    "document_number": null,\n'
+    '    "date_of_birth": "<DD.MM.LLLL ali null>",\n'
+    '    "expiry_date": null,\n'
+    '    "nationality": null\n'
+    "  }\n"
+    "}\n\n"
+    "Če datuma rojstva ne moreš zanesljivo prebrati, nastavi date_of_birth na null in "
+    "status na manual_review."
+)
+
 
 def _sniff_mime(data: bytes) -> str:
     """
@@ -166,7 +191,17 @@ class VeritasEngine:
         try:
             return self._run_inference(id_bytes, selfie_bytes)
         finally:
-            # Ničelno-znanjsko čiščenje – model in slike uničimo takoj po sklepanju
+            self._destroy()
+
+    def verify_dob(self, id_front_bytes: bytes) -> dict[str, Any]:
+        """Usmerjeno branje datuma rojstva s sprednje strani dokumenta.
+
+        Kliče se samo kot fallback ko MRZ na zadnji strani ni bil razberljiv.
+        Gemmi eksplicitno naroči, naj poišče polje 'Datum rojstva' / 'Date of birth'.
+        """
+        try:
+            return self._run_inference_dob(id_front_bytes)
+        finally:
             self._destroy()
 
     def _run_inference(
@@ -199,7 +234,63 @@ class VeritasEngine:
 
         del id_uri, id_bytes, messages, response
 
-        raw_json = _extract_first_json(raw_text)
+        try:
+            raw_json = _extract_first_json(raw_text)
+        except ValueError:
+            logger.error("Model vrnil nerazčlenljiv JSON; raw_text=%r", raw_text[:300])
+            return {
+                "status": "manual_review",
+                "user_name": "Neznano",
+                "age_verified": False,
+                "ocr_data": {
+                    "document_number": None,
+                    "date_of_birth": None,
+                    "expiry_date": None,
+                    "nationality": None,
+                },
+            }
+        return _validate_output(raw_json)
+
+    def _run_inference_dob(self, id_front_bytes: bytes) -> dict[str, Any]:
+        id_uri = _to_data_uri(id_front_bytes)
+
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image_url", "image_url": {"url": id_uri}},
+                    {"type": "text", "text": _USER_PROMPT_DOB_FOCUSED},
+                ],
+            },
+        ]
+
+        logger.info("Pošiljam zahtevo modelu Gemma 4 (usmerjeno branje DOB s sprednje strani)...")
+        response = self._llm.create_chat_completion(
+            messages=messages,
+            max_tokens=256,
+            temperature=0.05,
+        )
+
+        raw_text: str = response["choices"][0]["message"]["content"]
+        logger.info("Gemma 4 DOB odgovor: %r", raw_text[:200])
+
+        del id_uri, id_front_bytes, messages, response
+
+        try:
+            raw_json = _extract_first_json(raw_text)
+        except ValueError:
+            logger.error("Gemma 4 DOB: nerazčlenljiv JSON; raw_text=%r", raw_text[:300])
+            return {
+                "status": "manual_review",
+                "user_name": "Neznano",
+                "age_verified": False,
+                "ocr_data": {
+                    "document_number": None,
+                    "date_of_birth": None,
+                    "expiry_date": None,
+                    "nationality": None,
+                },
+            }
         return _validate_output(raw_json)
 
     def _destroy(self) -> None:
