@@ -7,8 +7,6 @@ import base64
 import gc
 import json
 import logging
-import re
-from pathlib import Path
 from typing import Any, Optional
 
 from llama_cpp import Llama
@@ -18,28 +16,30 @@ from config import settings
 
 logger = logging.getLogger(__name__)
 
-# Sistemski poziv definira natančno obliko izhoda
-_SYSTEM_PROMPT = """Si Veritas IDV sistem za preverjanje identitete.
-Analiziraš slike osebnih dokumentov in selfijev.
+# Sistemski poziv – samo OCR ekstrakcija, primerjava obrazov poteka v InsightFace
+_SYSTEM_PROMPT = """Si Veritas OCR sistem za branje osebnih dokumentov.
+Iz slike dokumenta izvleci besedilne podatke.
 OBVEZNO vrni SAMO veljavno JSON obliko – brez dodatnega besedila:
 {
   "status": "approved|rejected|manual_review",
   "user_name": "<ime in priimek iz dokumenta>",
   "age_verified": true|false,
-  "face_match": true|false|null
+  "ocr_data": {
+    "document_number": "<številka dokumenta ali null>",
+    "date_of_birth": "<datum rojstva DD.MM.LLLL ali null>",
+    "expiry_date": "<datum poteka DD.MM.LLLL ali null>",
+    "nationality": "<državljanstvo ali null>"
+  }
 }
 
 Pravila:
-- status=approved: dokument je veljaven, starost >= 18, obraz se ujema (če selfie podan)
+- status=approved: dokument je veljavne oblike in starost >= 18
 - status=rejected: dokument nevelaven, ponarejen ali oseba < 18 let
-- status=manual_review: kakovost slike premajhna za zanesljivo odločitev
-- face_match=null: selfie ni bil posredovan
+- status=manual_review: kakovost slike premajhna za zanesljivo branje
+- NE ocenjuj ujemanja obrazov – to opravi ločen sistem
 """
 
-_USER_PROMPT_ID_ONLY = "Preveri osebni dokument na sliki. Vrni JSON."
-_USER_PROMPT_WITH_SELFIE = (
-    "Preveri osebni dokument in primerj obraz s selfijem. Vrni JSON."
-)
+_USER_PROMPT_ID_ONLY = "Izvleci besedilne podatke iz osebnega dokumenta na sliki. Vrni JSON."
 
 
 def _sniff_mime(data: bytes) -> str:
@@ -99,11 +99,19 @@ def _validate_output(raw: dict[str, Any]) -> dict[str, Any]:
     if status not in allowed_statuses:
         status = "manual_review"
 
+    raw_ocr = raw.get("ocr_data") or {}
+    ocr_data = {
+        "document_number": raw_ocr.get("document_number"),
+        "date_of_birth": raw_ocr.get("date_of_birth"),
+        "expiry_date": raw_ocr.get("expiry_date"),
+        "nationality": raw_ocr.get("nationality"),
+    }
+
     return {
         "status": status,
         "user_name": str(raw.get("user_name", "")).strip() or "Neznano",
         "age_verified": bool(raw.get("age_verified", False)),
-        "face_match": raw.get("face_match"),  # Može biti None
+        "ocr_data": ocr_data,
     }
 
 
@@ -164,46 +172,32 @@ class VeritasEngine:
     def _run_inference(
         self,
         id_bytes: bytes,
-        selfie_bytes: Optional[bytes],
+        selfie_bytes: Optional[bytes] = None,
     ) -> dict[str, Any]:
         id_uri = _to_data_uri(id_bytes)
 
-        # Sestavi sporočila za multimodalni klepet
-        user_content: list[dict] = [
-            {"type": "image_url", "image_url": {"url": id_uri}},
-        ]
-
-        if selfie_bytes is not None:
-            selfie_uri = _to_data_uri(selfie_bytes)
-            user_content.append(
-                {"type": "image_url", "image_url": {"url": selfie_uri}}
-            )
-            user_content.append(
-                {"type": "text", "text": _USER_PROMPT_WITH_SELFIE}
-            )
-            del selfie_uri, selfie_bytes  # Takoj uniči selfie iz RAM-a
-        else:
-            user_content.append(
-                {"type": "text", "text": _USER_PROMPT_ID_ONLY}
-            )
-
         messages = [
             {"role": "system", "content": _SYSTEM_PROMPT},
-            {"role": "user", "content": user_content},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image_url", "image_url": {"url": id_uri}},
+                    {"type": "text", "text": _USER_PROMPT_ID_ONLY},
+                ],
+            },
         ]
 
-        logger.info("Pošiljam zahtevo modelu Gemma 4...")
+        logger.info("Pošiljam zahtevo modelu Gemma 4 (samo OCR)...")
         response = self._llm.create_chat_completion(
             messages=messages,
             max_tokens=512,
-            temperature=0.1,  # Nizka temperatura za deterministične odgovore
+            temperature=0.1,
         )
 
         raw_text: str = response["choices"][0]["message"]["content"]
         logger.info("Model vrnil odgovor, razčlenjujem JSON...")
 
-        # Takoj uniči vhodne podatke
-        del id_uri, id_bytes, user_content, messages, response
+        del id_uri, id_bytes, messages, response
 
         raw_json = _extract_first_json(raw_text)
         return _validate_output(raw_json)

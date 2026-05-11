@@ -27,7 +27,7 @@ echo.
 
 REM --- Terminal 1: FastAPI ---
 echo  [API] Zaganjam FastAPI streznik...
-start "Veritas API" /min cmd /k "cd /d "%PROJECT_DIR%" && python -m uvicorn main:app --port 8000"
+start "Veritas API" /min cmd /k "cd /d "%PROJECT_DIR%" && python -m uvicorn main:app --host 0.0.0.0 --port 8000"
 
 echo  [API] Cakam 3 sekunde, da se API zazene...
 timeout /t 3 /nobreak >nul

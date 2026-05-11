@@ -7,5 +7,16 @@ sqlalchemy==2.0.49
 pydantic==2.13.4
 pydantic-settings==2.14.1
 python-jose[cryptography]==3.5.0
-# llama-cpp-python – namesti ročno s pre-built kolesom za Windows:
+# Fast Path: MRZ OCR + face detection
+pytesseract>=0.3.13
+opencv-python>=4.9.0
+insightface>=0.7.3
+onnxruntime>=1.18.0
+# QR code generation (Streamlit frontend)
+qrcode[pil]>=7.4
+streamlit>=1.35.0
+requests>=2.32.0
+# llama-cpp-python – install manually with pre-built wheel for Windows:
 # pip install llama-cpp-python --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu
+# mrz – optional fast MRZ library (recommended):
+# pip install mrz

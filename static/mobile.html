@@ -1,0 +1,962 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/>
+<meta name="theme-color" content="#000"/>
+<title>Veritas ID</title>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#000;--card:#1c1c1e;--card2:#2c2c2e;--text:#f5f5f7;--muted:#98989d;
+  --border:#3a3a3c;--blue:#0071e3;--green:#34c759;--red:#ff3b30;--orange:#ff9f0a;
+}
+html,body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text",sans-serif;-webkit-font-smoothing:antialiased;min-height:100dvh;overflow-x:hidden}
+
+.app{display:flex;flex-direction:column;min-height:100dvh}
+.header{padding:1.5rem 1.5rem .75rem;text-align:center}
+.logo{width:44px;height:44px;background:var(--card);border-radius:50%;display:inline-flex;align-items:center;justify-content:center;margin-bottom:.6rem;box-shadow:0 4px 20px rgba(0,0,0,.4)}
+.header h1{font-size:1.3rem;font-weight:700;letter-spacing:-.04em}
+.header p{font-size:.78rem;color:var(--muted);margin-top:.2rem}
+
+/* ── step dots ── */
+.steps{display:flex;justify-content:center;gap:.45rem;margin-bottom:1rem;padding:0 1rem}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--border);transition:background .3s,transform .3s}
+.dot.active{background:var(--blue);transform:scale(1.35)}
+.dot.done{background:var(--green)}
+
+.content{flex:1;padding:0 1rem 2rem}
+.screen{display:none}.screen.active{display:block}
+
+/* ── viewfinder ── */
+.vf-wrap{
+  position:relative;width:100%;background:#111;
+  border-radius:1.25rem;overflow:hidden;margin-bottom:.85rem;
+}
+.vf-wrap video{display:block;width:100%;height:100%;object-fit:cover}
+
+/* frozen still after capture */
+.vf-still{
+  display:none;position:absolute;inset:0;width:100%;height:100%;
+  object-fit:cover;z-index:4;border-radius:1.25rem;
+}
+
+/* ── card rect overlay ── */
+.cutout-card{position:absolute;inset:0;pointer-events:none;z-index:2}
+.cutout-card::after{
+  content:'';position:absolute;
+  top:18%;left:5%;right:5%;bottom:18%;
+  border:2.5px solid rgba(255,255,255,.78);
+  border-radius:1rem;
+  box-shadow:0 0 0 9999px rgba(0,0,0,.52);
+}
+
+/* ── MRZ overlay ── */
+.cutout-mrz{position:absolute;inset:0;pointer-events:none;z-index:2}
+.cutout-mrz::after{
+  content:'';position:absolute;
+  top:18%;left:5%;right:5%;bottom:18%;
+  border:2.5px solid rgba(255,255,255,.78);
+  border-radius:1rem;
+  box-shadow:0 0 0 9999px rgba(0,0,0,.52);
+}
+.mrz-label{
+  position:absolute;bottom:20%;left:0;right:0;
+  text-align:center;font-size:.6rem;font-weight:800;letter-spacing:.14em;
+  color:rgba(255,200,0,.92);pointer-events:none;z-index:3;
+}
+.mrz-strip{
+  position:absolute;bottom:19%;left:6%;right:6%;height:22%;
+  border:2px dashed rgba(255,200,0,.72);
+  border-radius:.4rem;pointer-events:none;z-index:3;
+}
+
+/* ── face oval overlay ── */
+.cutout-face{position:absolute;inset:0;pointer-events:none;z-index:2}
+.cutout-face::after{
+  content:'';position:absolute;
+  top:6%;left:18%;right:18%;bottom:6%;
+  border:2.5px solid rgba(255,255,255,.78);
+  border-radius:50%;
+  box-shadow:0 0 0 9999px rgba(0,0,0,.52);
+}
+
+/* ── countdown ring ── */
+.countdown-wrap{
+  position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+  pointer-events:none;z-index:5;
+}
+.countdown-ring{display:none}
+.countdown-ring svg{transform:rotate(-90deg)}
+.countdown-ring circle.track{fill:none;stroke:rgba(255,255,255,.18);stroke-width:5}
+.countdown-ring circle.prog {fill:none;stroke:var(--blue);stroke-width:5;stroke-linecap:round;
+  transition:stroke-dashoffset .1s linear}
+.countdown-num{
+  position:absolute;font-size:2rem;font-weight:700;color:#fff;
+  text-shadow:0 2px 8px rgba(0,0,0,.6);letter-spacing:-.04em;
+}
+
+/* ── flash overlay ── */
+.flash{
+  display:none;position:absolute;inset:0;background:#fff;
+  border-radius:1.25rem;z-index:10;pointer-events:none;
+  animation:flashFade .35s ease-out forwards;
+}
+@keyframes flashFade{0%{opacity:.85}100%{opacity:0}}
+
+/* ── hint bar ── */
+.vf-hint{
+  position:absolute;bottom:0;left:0;right:0;
+  text-align:center;padding:.55rem .75rem;
+  font-size:.74rem;color:rgba(255,255,255,.88);
+  background:linear-gradient(transparent,rgba(0,0,0,.68));
+  pointer-events:none;z-index:6;line-height:1.4;
+}
+
+/* ── captured badge ── */
+.vf-captured-badge{
+  position:absolute;top:.6rem;right:.6rem;
+  background:var(--green);color:#fff;
+  font-size:.68rem;font-weight:700;
+  padding:.28rem .65rem;border-radius:999px;
+  display:none;z-index:7;
+}
+
+/* ── liveness angle chips ── */
+.liveness-row{display:flex;justify-content:center;gap:.45rem;margin-bottom:.8rem;flex-wrap:wrap}
+.angle-chip{
+  display:flex;flex-direction:column;align-items:center;gap:.18rem;
+  background:var(--card2);border-radius:.75rem;padding:.42rem .6rem;
+  font-size:.62rem;color:var(--muted);border:1.5px solid var(--border);
+  transition:background .25s,border-color .25s,color .25s;min-width:50px;
+}
+.angle-chip.active{background:rgba(0,113,227,.2);border-color:var(--blue);color:var(--blue)}
+.angle-chip.done  {background:rgba(52,199,89,.15);border-color:var(--green);color:var(--green)}
+.angle-chip svg{width:18px;height:18px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+
+/* ── liveness auto banner ── */
+.liveness-auto-banner{
+  background:rgba(0,113,227,.1);border:1px solid rgba(0,113,227,.3);
+  border-radius:.85rem;padding:.55rem .85rem;
+  font-size:.74rem;color:var(--blue);text-align:center;
+  margin-bottom:.75rem;line-height:1.4;
+}
+
+/* ── MRZ scan animation ── */
+.mrz-scan-overlay{
+  display:none;position:absolute;inset:0;z-index:10;
+  background:rgba(0,0,0,.85);border-radius:1.25rem;
+  align-items:center;justify-content:center;flex-direction:column;gap:.75rem;
+}
+.mrz-scan-overlay.show{display:flex}
+.mrz-scan-line{
+  width:80%;height:2px;background:rgba(255,200,0,.92);
+  box-shadow:0 0 10px rgba(255,200,0,.65);
+  animation:scanLine 1.3s ease-in-out infinite alternate;
+}
+@keyframes scanLine{from{transform:translateY(-26px)}to{transform:translateY(26px)}}
+.mrz-scan-text{font-size:.8rem;font-weight:600;color:rgba(255,200,0,.95);letter-spacing:.04em}
+
+/* ── buttons ── */
+.btn{display:block;width:100%;padding:.9rem 1.5rem;border:none;border-radius:999px;font-size:.98rem;font-weight:600;letter-spacing:-.01em;cursor:pointer;transition:opacity .15s,transform .1s;-webkit-tap-highlight-color:transparent}
+.btn:active{transform:scale(.97)}
+.btn-primary  {background:var(--blue);color:#fff}
+.btn-secondary{background:var(--card2);color:var(--text)}
+.btn-success  {background:var(--green);color:#fff}
+.btn-danger   {background:var(--red);color:#fff}
+.btn+.btn{margin-top:.55rem}
+.btn:disabled{opacity:.38;cursor:not-allowed}
+.btn-row{display:grid;grid-template-columns:1fr 1fr;gap:.55rem}
+
+/* ── card ── */
+.card{background:var(--card);border-radius:1.5rem;padding:1.4rem;margin-bottom:.8rem}
+.card-title{font-size:1.05rem;font-weight:600;letter-spacing:-.03em;margin-bottom:.25rem}
+.card-sub{font-size:.78rem;color:var(--muted);margin-bottom:1rem;line-height:1.45}
+
+/* ── NFC row ── */
+.nfc-row{display:flex;align-items:center;gap:.8rem;background:var(--card2);border:1px solid var(--border);border-radius:1.25rem;padding:.9rem 1rem;margin-bottom:.65rem}
+.nfc-icon{width:38px;height:38px;flex-shrink:0;background:var(--card);border-radius:50%;display:flex;align-items:center;justify-content:center}
+.nfc-info{flex:1}.nfc-title{font-size:.85rem;font-weight:600}.nfc-sub{font-size:.72rem;color:var(--muted);margin-top:.1rem}
+.nb{font-size:.65rem;font-weight:700;padding:.2rem .5rem;border-radius:999px;white-space:nowrap}
+.nb.idle   {background:var(--card2);color:var(--muted);border:1px solid var(--border)}
+.nb.reading{background:rgba(0,113,227,.15);color:var(--blue)}
+.nb.done   {background:rgba(52,199,89,.15);color:var(--green)}
+.nb.error  {background:rgba(255,59,48,.15);color:var(--red)}
+
+/* ── checklist ── */
+.checklist{list-style:none;margin-bottom:1.1rem}
+.checklist li{display:flex;align-items:center;gap:.7rem;padding:.6rem 0;border-bottom:1px solid var(--border);font-size:.85rem}
+.checklist li:last-child{border-bottom:none}
+.ci{width:24px;height:24px;flex-shrink:0;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:.75rem}
+.ci.pending{background:var(--card2);color:var(--muted)}
+.ci.ok{background:rgba(52,199,89,.15);color:var(--green)}
+
+/* ── result ── */
+.result-icon{width:60px;height:60px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:1.7rem;margin:0 auto .9rem}
+.ri-ok  {background:rgba(52,199,89,.15)}
+.ri-fail{background:rgba(255,59,48,.15)}
+.ri-warn{background:rgba(255,159,10,.15)}
+.result-title{font-size:1.3rem;font-weight:700;text-align:center;letter-spacing:-.03em}
+.result-sub{font-size:.8rem;color:var(--muted);text-align:center;margin-top:.25rem;line-height:1.5}
+.metric-grid{display:grid;grid-template-columns:1fr 1fr;gap:.55rem;margin-top:1.1rem}
+.metric{background:var(--card2);border-radius:1rem;padding:.85rem;text-align:center}
+.ml{font-size:.62rem;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+.mv{font-size:.92rem;font-weight:600;margin-top:.22rem}
+.mv.ok{color:var(--green)}.mv.fail{color:var(--red)}
+
+/* ── Gemma gate ── */
+.gemma-gate{
+  background:rgba(255,159,10,.08);border:1.5px solid rgba(255,159,10,.4);
+  border-radius:1.25rem;padding:1.25rem 1.1rem;margin-bottom:.85rem;
+}
+.gemma-gate-title{font-size:.92rem;font-weight:700;color:var(--orange);margin-bottom:.35rem;display:flex;align-items:center;gap:.5rem}
+.gemma-gate-body{font-size:.78rem;color:var(--text);line-height:1.55;margin-bottom:.9rem}
+.gemma-gate-reason{font-size:.72rem;color:var(--muted);font-family:monospace;background:var(--card2);border-radius:.6rem;padding:.45rem .7rem;margin-bottom:.9rem}
+
+/* ── spinner ── */
+@keyframes spin{to{transform:rotate(360deg)}}
+.spinner{width:36px;height:36px;border:3px solid var(--border);border-top-color:var(--blue);border-radius:50%;animation:spin .8s linear infinite;margin:0 auto .9rem}
+</style>
+</head>
+<body>
+<div class="app">
+
+<div class="header">
+  <div class="logo">
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#0071e3" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/>
+    </svg>
+  </div>
+  <h1>Veritas ID</h1>
+  <p>Secure identity verification</p>
+</div>
+
+<div class="steps" id="stepDots">
+  <div class="dot active" id="dot0"></div>
+  <div class="dot" id="dot1"></div>
+  <div class="dot" id="dot2"></div>
+  <div class="dot" id="dot3"></div>
+</div>
+
+<div class="content">
+
+<!-- ════════════════════════════════
+     SCREEN 0 — ID Front
+═════════════════════════════════ -->
+<div class="screen active" id="screen0">
+  <div class="card">
+    <div class="card-title">Step 1 — ID Front</div>
+    <div class="card-sub">Align the <strong>front</strong> of your ID inside the white frame. Hold steady, then tap <strong>Capture</strong>.</div>
+
+    <div class="vf-wrap" id="vfIdFront" style="height:58vw;max-height:295px">
+      <video id="vidIdFront" autoplay playsinline muted></video>
+      <img  id="stillIdFront" class="vf-still" alt=""/>
+      <div class="cutout-card"></div>
+      <div class="vf-hint" id="hintIdFront">Tap "Open Camera" to begin</div>
+      <div class="vf-captured-badge" id="badgeIdFront">✓ Captured</div>
+      <div class="flash" id="flashIdFront"></div>
+    </div>
+
+    <div class="btn-row">
+      <button class="btn btn-secondary" id="btnOpenIdFront"    onclick="openDocCam('idFront')">Open Camera</button>
+      <button class="btn btn-primary"   id="btnCaptureIdFront" onclick="captureDoc('idFront')" disabled>Capture</button>
+    </div>
+  </div>
+  <button class="btn btn-primary" id="nextToStep1" onclick="goStep(1)" disabled>Next →</button>
+</div>
+
+<!-- ════════════════════════════════
+     SCREEN 1 — ID Back (MRZ)
+═════════════════════════════════ -->
+<div class="screen" id="screen1">
+  <div class="card">
+    <div class="card-title">Step 2 — ID Back (MRZ)</div>
+    <div class="card-sub">Show the <strong>back</strong> of your ID. Keep the machine-readable strip inside the yellow dashed zone.</div>
+
+    <div class="vf-wrap" id="vfIdBack" style="height:58vw;max-height:295px">
+      <video id="vidIdBack" autoplay playsinline muted></video>
+      <img  id="stillIdBack" class="vf-still" alt=""/>
+      <div class="cutout-mrz"></div>
+      <div class="mrz-strip"></div>
+      <div class="mrz-label">MRZ</div>
+      <div class="mrz-scan-overlay" id="mrzScanOverlay">
+        <div class="mrz-scan-line"></div>
+        <div class="mrz-scan-text">Scanning MRZ data…</div>
+      </div>
+      <div class="vf-hint" id="hintIdBack">Tap "Open Camera" to begin</div>
+      <div class="vf-captured-badge" id="badgeIdBack">✓ Captured</div>
+      <div class="flash" id="flashIdBack"></div>
+    </div>
+
+    <div class="btn-row">
+      <button class="btn btn-secondary" id="btnOpenIdBack"    onclick="openDocCam('idBack')">Open Camera</button>
+      <button class="btn btn-primary"   id="btnCaptureIdBack" onclick="captureDoc('idBack')" disabled>Capture</button>
+    </div>
+  </div>
+
+  <div class="nfc-row">
+    <div class="nfc-icon">
+      <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="#0071e3" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M20 7a9 9 0 0 1 0 10"/><path d="M16.7 10.3a5 5 0 0 1 0 3.4"/>
+        <path d="M6 12h.01"/><path d="M4 7a9 9 0 0 0 0 10"/><path d="M7.3 10.3a5 5 0 0 0 0 3.4"/>
+      </svg>
+    </div>
+    <div class="nfc-info">
+      <div class="nfc-title">NFC Chip (optional)</div>
+      <div class="nfc-sub" id="nfcSub">Requires HTTPS + Android Chrome</div>
+    </div>
+    <span class="nb idle" id="nfcBadge">IDLE</span>
+  </div>
+  <button class="btn btn-secondary" id="nfcBtn" onclick="readNFC()">Read NFC Chip</button>
+  <button class="btn btn-primary" id="nextToStep2" onclick="goStep(2)" disabled style="margin-top:.6rem">Next →</button>
+</div>
+
+<!-- ════════════════════════════════
+     SCREEN 2 — Automated Liveness
+═════════════════════════════════ -->
+<div class="screen" id="screen2">
+  <div class="card">
+    <div class="card-title">Step 3 — Liveness Check</div>
+
+    <div class="liveness-auto-banner" id="livenessBanner">
+      Camera will start automatically. Follow each prompt — frames are captured for you.
+    </div>
+
+    <!-- angle progress chips -->
+    <div class="liveness-row">
+      <div class="angle-chip" id="chip0">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M12 14v6"/><path d="M9 20h6"/></svg>
+        <span>Straight</span>
+      </div>
+      <div class="angle-chip" id="chip1">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="10" r="4"/><path d="m8 6 4-4 4 4"/></svg>
+        <span>Left</span>
+      </div>
+      <div class="angle-chip" id="chip2">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="10" r="4"/><path d="m16 6-4-4-4 4"/></svg>
+        <span>Right</span>
+      </div>
+      <div class="angle-chip" id="chip3">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="9" r="4"/><path d="m8 5 4-4 4 4"/></svg>
+        <span>Up</span>
+      </div>
+      <div class="angle-chip" id="chip4">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="15" r="4"/><path d="m8 19 4 4 4-4"/></svg>
+        <span>Down</span>
+      </div>
+    </div>
+
+    <div class="vf-wrap" id="vfSelfie" style="height:72vw;max-height:360px">
+      <video id="vidSelfie" autoplay playsinline muted></video>
+      <img  id="stillSelfie" class="vf-still" alt=""/>
+      <div class="cutout-face"></div>
+
+      <!-- countdown ring sits inside the oval -->
+      <div class="countdown-wrap">
+        <div class="countdown-ring" id="countdownRing">
+          <svg width="80" height="80" viewBox="0 0 80 80">
+            <circle class="track" cx="40" cy="40" r="34"/>
+            <circle class="prog"  cx="40" cy="40" r="34" id="countdownArc"
+              stroke-dasharray="213.6" stroke-dashoffset="213.6"/>
+          </svg>
+          <div class="countdown-num" id="countdownNum">2</div>
+        </div>
+      </div>
+
+      <div class="vf-hint" id="hintSelfie">Starting camera…</div>
+      <div class="vf-captured-badge" id="badgeSelfie">✓ Done</div>
+      <div class="flash" id="flashSelfie"></div>
+    </div>
+
+    <!-- shown only while sequence is not yet running -->
+    <button class="btn btn-primary" id="btnStartLiveness" onclick="startLivenessSequence()" style="display:none">
+      Start Liveness Scan
+    </button>
+  </div>
+  <!-- auto-advances; Next shown after completion -->
+  <button class="btn btn-primary" id="nextToStep3" onclick="goStep(3)" disabled style="display:none">Next →</button>
+</div>
+
+<!-- ════════════════════════════════
+     SCREEN 3 — Review & Submit
+═════════════════════════════════ -->
+<div class="screen" id="screen3">
+  <div class="card">
+    <div class="card-title">Review &amp; Submit</div>
+    <div class="card-sub">All captures complete. Confirm to begin verification.</div>
+    <ul class="checklist">
+      <li><div class="ci ok">✓</div><span>ID Front</span></li>
+      <li><div class="ci ok">✓</div><span>ID Back (MRZ)</span></li>
+      <li><div class="ci ok">✓</div><span>Liveness — 5 angles</span></li>
+      <li><div class="ci pending" id="ck3">—</div><span id="nfcCheckLabel">NFC chip (optional)</span></li>
+    </ul>
+    <button class="btn btn-success" onclick="submitAll()">Submit Verification</button>
+    <button class="btn btn-secondary" onclick="resetAll()" style="margin-top:.6rem">Start Over</button>
+  </div>
+</div>
+
+<!-- ── Processing ── -->
+<div class="screen" id="screenProcessing">
+  <div class="card" style="text-align:center;padding:2.75rem 1.5rem">
+    <div class="spinner"></div>
+    <div class="card-title" id="processingTitle">Processing…</div>
+    <div class="card-sub"   id="processingMsg">Uploading securely</div>
+  </div>
+  <div style="font-size:.7rem;color:var(--muted);text-align:center;padding:.4rem" id="processingStatus"></div>
+</div>
+
+<!-- ── Gemma Confirmation Gate ── -->
+<div class="screen" id="screenGemmaGate">
+  <div class="gemma-gate">
+    <div class="gemma-gate-title">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/>
+        <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+      </svg>
+      Standard parsing failed
+    </div>
+    <div class="gemma-gate-body">
+      The Fast Path (OCR + face detection) could not extract the required data.
+      You can authorise the <strong>Gemma 4 AI model</strong> for advanced extraction.
+      This may take 30–90 seconds.
+    </div>
+    <div class="gemma-gate-reason" id="gemmaGateReason">Reason: —</div>
+    <button class="btn btn-danger" id="btnActivateGemma" onclick="activateGemma()">Activate Gemma 4</button>
+    <button class="btn btn-secondary" onclick="resetAll()" style="margin-top:.55rem">Cancel</button>
+  </div>
+</div>
+
+<!-- ── Result ── -->
+<div class="screen" id="screenResult">
+  <div class="card" style="text-align:center;padding:2.25rem 1.5rem">
+    <div class="result-icon" id="resultIcon"></div>
+    <div class="result-title" id="resultTitle">—</div>
+    <div class="result-sub"   id="resultSub">—</div>
+    <div class="metric-grid"  id="metricGrid"></div>
+  </div>
+  <button class="btn btn-secondary" onclick="resetAll()" style="margin-top:.9rem">New Verification</button>
+</div>
+
+</div><!-- /content -->
+</div><!-- /app -->
+
+<script>
+'use strict';
+const SESSION_ID = "__SESSION_ID__";
+
+/* ═══════════════════════════════════════════════════════════
+   Global state
+═══════════════════════════════════════════════════════════ */
+// Captured blobs for the two document sides
+const docBlobs = { idFront: null, idBack: null };
+
+// Active MediaStream per slot (only one open at a time)
+const streams  = { idFront: null, idBack: null, selfie: null };
+
+// Liveness: 5 blobs, one per angle, index matches LIVENESS_ANGLES
+const selfieBlobs = [];
+let livenessRunning = false;
+
+let nfcDob        = null;
+let pendingTaskId = null;
+
+/* ═══════════════════════════════════════════════════════════
+   Liveness sequence definition
+   Order: Straight → Left → Right → Up → Down
+   Each step: 2 s countdown, then auto-capture + flash
+═══════════════════════════════════════════════════════════ */
+const LIVENESS_ANGLES = [
+  { label: 'Straight', instruction: 'Look <strong>straight</strong> at the camera' },
+  { label: 'Left',     instruction: 'Turn your head to the <strong>left</strong>'  },
+  { label: 'Right',    instruction: 'Turn your head to the <strong>right</strong>' },
+  { label: 'Up',       instruction: 'Tilt your head <strong>up</strong> slightly'  },
+  { label: 'Down',     instruction: 'Tilt your head <strong>down</strong> slightly' },
+];
+const COUNTDOWN_SECS  = 2;          // seconds to hold each pose
+const CIRCUMFERENCE   = 2 * Math.PI * 34; // matches r=34 in SVG
+
+/* ═══════════════════════════════════════════════════════════
+   Document camera (ID Front / ID Back) — rear-facing, manual
+═══════════════════════════════════════════════════════════ */
+async function openDocCam(key) {
+  if (_httpsRequired()) { _showHttpsError(); return; }
+  _stopStream(key);
+  const vid = document.getElementById(key === 'idFront' ? 'vidIdFront' : 'vidIdBack');
+  const hintId  = key === 'idFront' ? 'hintIdFront'    : 'hintIdBack';
+  const capBtnId = key === 'idFront' ? 'btnCaptureIdFront' : 'btnCaptureIdBack';
+  const openBtnId = key === 'idFront' ? 'btnOpenIdFront' : 'btnOpenIdBack';
+
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: {
+        facingMode: { ideal: 'environment' },
+        width:  { ideal: 1920 },
+        height: { ideal: 1080 },
+      },
+      audio: false,
+    });
+    streams[key] = stream;
+    vid.srcObject = stream;
+    vid.style.display = 'block';
+    document.getElementById(hintId).textContent    = 'Fit card inside the frame, then tap Capture';
+    document.getElementById(capBtnId).disabled     = false;
+    document.getElementById(openBtnId).textContent = 'Retake';
+  } catch (err) {
+    _camError(err);
+  }
+}
+
+function captureDoc(key) {
+  const vidId   = key === 'idFront' ? 'vidIdFront'       : 'vidIdBack';
+  const stillId = key === 'idFront' ? 'stillIdFront'     : 'stillIdBack';
+  const flashId = key === 'idFront' ? 'flashIdFront'     : 'flashIdBack';
+  const badgeId = key === 'idFront' ? 'badgeIdFront'     : 'badgeIdBack';
+  const hintId  = key === 'idFront' ? 'hintIdFront'      : 'hintIdBack';
+  const capBtnId = key === 'idFront' ? 'btnCaptureIdFront' : 'btnCaptureIdBack';
+  const nextBtnId = key === 'idFront' ? 'nextToStep1'     : 'nextToStep2';
+
+  const vid = document.getElementById(vidId);
+  const cnv = document.createElement('canvas');
+  cnv.width  = vid.videoWidth  || 1280;
+  cnv.height = vid.videoHeight || 720;
+  cnv.getContext('2d').drawImage(vid, 0, 0, cnv.width, cnv.height);
+
+  cnv.toBlob(blob => {
+    docBlobs[key] = blob;
+    _stopStream(key);
+
+    // Freeze still frame
+    const still = document.getElementById(stillId);
+    still.src   = URL.createObjectURL(blob);
+    still.style.display = 'block';
+    vid.style.display   = 'none';
+
+    // Flash feedback
+    _triggerFlash(flashId);
+
+    document.getElementById(badgeId).style.display  = 'block';
+    document.getElementById(hintId).style.display   = 'none';
+    document.getElementById(capBtnId).disabled      = true;
+    document.getElementById(nextBtnId).disabled     = false;
+
+    // MRZ animation on back capture
+    if (key === 'idBack') {
+      setTimeout(() => {
+        const o = document.getElementById('mrzScanOverlay');
+        o.classList.add('show');
+        setTimeout(() => o.classList.remove('show'), 2200);
+      }, 150);
+    }
+  }, 'image/jpeg', 0.93);
+}
+
+/* ═══════════════════════════════════════════════════════════
+   Liveness — fully automated sequence
+═══════════════════════════════════════════════════════════ */
+async function _initLiveness() {
+  if (_httpsRequired()) { _showHttpsError(); return; }
+  // Reset state
+  selfieBlobs.length = 0;
+  livenessRunning    = false;
+  LIVENESS_ANGLES.forEach((_, i) => {
+    document.getElementById('chip' + i).className = 'angle-chip';
+  });
+  document.getElementById('nextToStep3').style.display   = 'none';
+  document.getElementById('badgeSelfie').style.display   = 'none';
+  document.getElementById('btnStartLiveness').style.display = 'none';
+  document.getElementById('countdownRing').style.display = 'none';
+  document.getElementById('hintSelfie').textContent      = 'Starting front camera…';
+
+  // Open front camera
+  _stopStream('selfie');
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: {
+        facingMode: { ideal: 'user' },
+        width:  { ideal: 1280 },
+        height: { ideal: 720 },
+      },
+      audio: false,
+    });
+    streams.selfie = stream;
+    const vid = document.getElementById('vidSelfie');
+    vid.srcObject = stream;
+    vid.style.display = 'block';
+    document.getElementById('stillSelfie').style.display = 'none';
+
+    // Wait for first frame before starting
+    await new Promise(resolve => {
+      const onPlay = () => { vid.removeEventListener('playing', onPlay); resolve(); };
+      vid.addEventListener('playing', onPlay);
+    });
+
+    document.getElementById('hintSelfie').textContent = 'Keep your face inside the oval';
+    // Small delay so the user can see the live feed before sequence starts
+    await _sleep(700);
+    startLivenessSequence();
+
+  } catch (err) {
+    _camError(err);
+    // Offer manual start button as recovery
+    document.getElementById('btnStartLiveness').style.display = 'block';
+    document.getElementById('hintSelfie').textContent = 'Camera error — tap below to retry';
+  }
+}
+
+async function startLivenessSequence() {
+  if (livenessRunning) return;
+  livenessRunning = true;
+  document.getElementById('btnStartLiveness').style.display = 'none';
+  document.getElementById('livenessBanner').textContent = 'Follow each prompt — hold still for 2 seconds';
+
+  const vid      = document.getElementById('vidSelfie');
+  const arc      = document.getElementById('countdownArc');
+  const numEl    = document.getElementById('countdownNum');
+  const ring     = document.getElementById('countdownRing');
+  const hintEl   = document.getElementById('hintSelfie');
+  const flashEl  = document.getElementById('flashSelfie');
+  const badgeEl  = document.getElementById('badgeSelfie');
+
+  for (let i = 0; i < LIVENESS_ANGLES.length; i++) {
+    const angle = LIVENESS_ANGLES[i];
+
+    // Mark chip active
+    LIVENESS_ANGLES.forEach((_, j) => {
+      document.getElementById('chip' + j).className =
+        j < i ? 'angle-chip done' : j === i ? 'angle-chip active' : 'angle-chip';
+    });
+
+    hintEl.innerHTML = angle.instruction;
+
+    // Animate countdown ring for COUNTDOWN_SECS
+    ring.style.display = 'block';
+    const tickMs   = 50;
+    const totalMs  = COUNTDOWN_SECS * 1000;
+    let   elapsed  = 0;
+
+    await new Promise(resolve => {
+      const timer = setInterval(() => {
+        elapsed += tickMs;
+        const remaining = Math.max(0, COUNTDOWN_SECS - elapsed / 1000);
+        numEl.textContent = Math.ceil(remaining);
+
+        // Stroke offset: full circle = 0, empty = CIRCUMFERENCE
+        arc.style.strokeDashoffset =
+          String(CIRCUMFERENCE * (elapsed / totalMs));
+
+        if (elapsed >= totalMs) {
+          clearInterval(timer);
+          resolve();
+        }
+      }, tickMs);
+    });
+
+    // Auto-capture this angle
+    const cnv = document.createElement('canvas');
+    cnv.width  = vid.videoWidth  || 1280;
+    cnv.height = vid.videoHeight || 720;
+    cnv.getContext('2d').drawImage(vid, 0, 0, cnv.width, cnv.height);
+
+    await new Promise(resolve => {
+      cnv.toBlob(blob => {
+        selfieBlobs[i] = blob;
+        resolve();
+      }, 'image/jpeg', 0.92);
+    });
+
+    // Flash + mark chip done
+    _triggerFlash('flashSelfie');
+    document.getElementById('chip' + i).className = 'angle-chip done';
+
+    // Reset ring for next angle
+    arc.style.strokeDashoffset = String(CIRCUMFERENCE);
+    numEl.textContent = String(COUNTDOWN_SECS);
+
+    // Brief pause between angles
+    if (i < LIVENESS_ANGLES.length - 1) await _sleep(400);
+  }
+
+  // All done
+  ring.style.display = 'none';
+  _stopStream('selfie');
+
+  // Freeze last captured frame as still
+  if (selfieBlobs[selfieBlobs.length - 1]) {
+    const still = document.getElementById('stillSelfie');
+    still.src   = URL.createObjectURL(selfieBlobs[selfieBlobs.length - 1]);
+    still.style.display = 'block';
+    document.getElementById('vidSelfie').style.display = 'none';
+  }
+
+  hintEl.style.display = 'none';
+  badgeEl.style.display = 'block';
+  document.getElementById('livenessBanner').textContent = '✓ All 5 angles captured successfully';
+  document.getElementById('nextToStep3').style.display  = 'block';
+  document.getElementById('nextToStep3').disabled       = false;
+  livenessRunning = false;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   Step navigation
+═══════════════════════════════════════════════════════════ */
+function goStep(n) {
+  _stopAllStreams();
+  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+  document.querySelectorAll('.dot').forEach((d, i) => {
+    d.classList.toggle('done',   i < n);
+    d.classList.toggle('active', i === n);
+  });
+  document.getElementById(['screen0','screen1','screen2','screen3'][n]).classList.add('active');
+  window.scrollTo(0, 0);
+  if (n === 2) _initLiveness();
+}
+
+/* ═══════════════════════════════════════════════════════════
+   NFC
+═══════════════════════════════════════════════════════════ */
+async function readNFC() {
+  const badge = document.getElementById('nfcBadge');
+  const sub   = document.getElementById('nfcSub');
+  const btn   = document.getElementById('nfcBtn');
+  if (!('NDEFReader' in window)) {
+    badge.className = 'nb error'; badge.textContent = 'NOT SUPPORTED';
+    sub.textContent = 'WebNFC needs HTTPS + Android Chrome. MRZ will be used instead.';
+    return;
+  }
+  try {
+    const ndef = new NDEFReader();
+    badge.className = 'nb reading'; badge.textContent = 'READING…';
+    sub.textContent = 'Hold the eID chip to the back of the phone';
+    btn.disabled    = true;
+    await ndef.scan();
+    ndef.addEventListener('reading', ({ message }) => {
+      let dob = null;
+      for (const r of message.records) {
+        if (r.recordType === 'text') {
+          const t  = new TextDecoder(r.encoding || 'utf-8').decode(r.data);
+          const m1 = t.match(/\b(\d{4})-(\d{2})-(\d{2})\b/);
+          const m2 = t.match(/\b(\d{2})(\d{2})(\d{2})\b/);
+          if (m1)      dob = `${m1[1]}-${m1[2]}-${m1[3]}`;
+          else if (m2) { const yy = parseInt(m2[1], 10); dob = `${yy >= 10 ? 1900 + yy : 2000 + yy}-${m2[2]}-${m2[3]}`; }
+        }
+      }
+      btn.disabled = false;
+      if (dob) {
+        nfcDob = dob;
+        badge.className = 'nb done'; badge.textContent = 'READ ✓';
+        sub.textContent = `Date of birth: ${dob}`;
+        const ck3 = document.getElementById('ck3');
+        ck3.className   = 'ci ok'; ck3.textContent = '✓';
+        document.getElementById('nfcCheckLabel').textContent = `NFC — DOB: ${dob}`;
+      } else {
+        badge.className = 'nb error'; badge.textContent = 'PARSE ERROR';
+        sub.textContent = 'Chip read but DOB not found.';
+      }
+    });
+  } catch (err) {
+    badge.className = 'nb error'; badge.textContent = 'ERROR';
+    sub.textContent = err.message; btn.disabled = false;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════
+   Submit
+═══════════════════════════════════════════════════════════ */
+async function submitAll() {
+  if (!docBlobs.idFront)              { alert('ID Front photo missing.');      return; }
+  if (!docBlobs.idBack)               { alert('ID Back photo missing.');       return; }
+  if (selfieBlobs.length < LIVENESS_ANGLES.length) { alert('Liveness incomplete.'); return; }
+
+  showScreen('screenProcessing');
+  _setProcessing('Uploading securely…', '');
+
+  const fd = new FormData();
+  fd.append('id_front', docBlobs.idFront, 'id_front.jpg');
+  fd.append('id_back',  docBlobs.idBack,  'id_back.jpg');
+  // Frame 0 (Straight) is the primary comparison frame; all frames forwarded
+  selfieBlobs.forEach((b, i) => fd.append('selfie_frames', b, `selfie_${i}.jpg`));
+  if (nfcDob) fd.append('nfc_dob', nfcDob);
+
+  let taskId;
+  try {
+    const resp = await fetch(`/mobile/verify/${SESSION_ID}`, { method: 'POST', body: fd });
+    if (!resp.ok) throw new Error(`Upload failed (${resp.status}): ${await resp.text()}`);
+    taskId        = (await resp.json()).task_id;
+    pendingTaskId = taskId;
+  } catch (err) { showError(err.message); return; }
+
+  _setProcessing('AI is analysing your document…', `Task: ${taskId.slice(0, 8)}…`);
+  await pollStatus(taskId);
+}
+
+/* ═══════════════════════════════════════════════════════════
+   Status polling
+═══════════════════════════════════════════════════════════ */
+async function pollStatus(taskId) {
+  for (let i = 0; i < 90; i++) {
+    await _sleep(2000);
+    try {
+      const r = await fetch(`/verify/status/${taskId}`);
+      if (!r.ok) continue;
+      const p = await r.json();
+      if (p.state === 'SUCCESS')                    { showResult(p.result); return; }
+      if (p.state === 'FAILURE')                    { showError('Verification task failed.'); return; }
+      if (p.state === 'REQUIRES_GEMMA_CONFIRMATION'){ _showGemmaGate(p.gemma_reason || 'Unknown', taskId); return; }
+      document.getElementById('processingStatus').textContent = `[${i + 1}/90] ${p.state}`;
+    } catch (_) {}
+  }
+  showError('Timed out. Please try again.');
+}
+
+/* ═══════════════════════════════════════════════════════════
+   Gemma gate
+═══════════════════════════════════════════════════════════ */
+function _showGemmaGate(reason, taskId) {
+  pendingTaskId = taskId;
+  document.getElementById('gemmaGateReason').textContent = 'Reason: ' + reason;
+  showScreen('screenGemmaGate');
+}
+
+async function activateGemma() {
+  if (!pendingTaskId) return;
+  document.getElementById('btnActivateGemma').disabled = true;
+  showScreen('screenProcessing');
+  _setProcessing('Gemma 4 is running…', 'Advanced AI extraction in progress — please wait');
+  try {
+    const resp = await fetch(`/verify/trigger-gemma/${pendingTaskId}`, { method: 'POST' });
+    if (!resp.ok) { showError(`Failed to activate Gemma (${resp.status})`); return; }
+    // trigger-gemma returns a NEW task_id
+    const data = await resp.json();
+    pendingTaskId = data.task_id;
+  } catch (err) { showError(err.message); return; }
+  await pollStatus(pendingTaskId);
+}
+
+/* ═══════════════════════════════════════════════════════════
+   Result display
+═══════════════════════════════════════════════════════════ */
+function showResult(result) {
+  showScreen('screenResult');
+  const icon  = document.getElementById('resultIcon');
+  const title = document.getElementById('resultTitle');
+  const sub   = document.getElementById('resultSub');
+  if (result.status === 'approved') {
+    icon.className  = 'result-icon ri-ok';   icon.textContent = '✓';
+    title.textContent = 'Identity Verified';  sub.textContent  = 'All checks passed.';
+  } else if (result.status === 'manual_review') {
+    icon.className  = 'result-icon ri-warn'; icon.textContent = '⚠';
+    title.textContent = 'Manual Review';      sub.textContent  = 'Automated checks were inconclusive.';
+  } else {
+    icon.className  = 'result-icon ri-fail'; icon.textContent = '✕';
+    title.textContent = 'Verification Failed'; sub.textContent = 'Identity could not be confirmed.';
+  }
+  document.getElementById('metricGrid').innerHTML = [
+    { label: 'Name',       value: result.user_name || '—',
+      cls: '' },
+    { label: 'Age 18+',    value: result.age_verified ? 'Confirmed' : 'Failed',
+      cls: result.age_verified ? 'ok' : 'fail' },
+    { label: 'Face Match', value: result.face_match === true ? 'Match' : result.face_match === false ? 'No Match' : 'N/A',
+      cls: result.face_match === true ? 'ok' : result.face_match === false ? 'fail' : '' },
+    { label: 'Source',     value: (result.ocr_source || '—').replace(/_/g, ' '),
+      cls: '' },
+  ].map(m =>
+    `<div class="metric"><div class="ml">${m.label}</div><div class="mv ${m.cls}">${m.value}</div></div>`
+  ).join('');
+}
+
+function showError(msg) {
+  showScreen('screenResult');
+  const icon = document.getElementById('resultIcon');
+  icon.className = 'result-icon ri-fail'; icon.textContent = '✕';
+  document.getElementById('resultTitle').textContent = 'Error';
+  document.getElementById('resultSub').textContent   = msg;
+  document.getElementById('metricGrid').innerHTML    = '';
+}
+
+/* ═══════════════════════════════════════════════════════════
+   Utilities
+═══════════════════════════════════════════════════════════ */
+function showScreen(id) {
+  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+  const noSteps = ['screenProcessing','screenResult','screenGemmaGate'].includes(id);
+  document.getElementById('stepDots').style.display = noSteps ? 'none' : 'flex';
+  window.scrollTo(0, 0);
+}
+
+function _setProcessing(title, sub) {
+  document.getElementById('processingTitle').textContent  = title;
+  document.getElementById('processingMsg').textContent    = sub;
+  document.getElementById('processingStatus').textContent = '';
+}
+
+function _triggerFlash(id) {
+  const el = document.getElementById(id);
+  el.style.display = 'block';
+  // Re-trigger animation by cloning the node
+  const clone = el.cloneNode(true);
+  el.parentNode.replaceChild(clone, el);
+  clone.style.display = 'block';
+  setTimeout(() => { clone.style.display = 'none'; }, 400);
+}
+
+function _stopStream(key) {
+  const s = streams[key];
+  if (s) { s.getTracks().forEach(t => t.stop()); streams[key] = null; }
+}
+function _stopAllStreams() { Object.keys(streams).forEach(_stopStream); }
+
+function _httpsRequired() {
+  // navigator.mediaDevices is undefined on plain HTTP (insecure context)
+  return !(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
+}
+
+function _showHttpsError() {
+  // Replace the whole content area with a clear, friendly explanation
+  document.getElementById('stepDots').style.display = 'none';
+  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+  const el = document.createElement('div');
+  el.style.cssText = 'margin:2rem 1rem;background:#1c1c1e;border-radius:1.5rem;padding:2rem;text-align:center';
+  el.innerHTML = `
+    <div style="font-size:2.5rem;margin-bottom:1rem">🔒</div>
+    <div style="font-size:1.05rem;font-weight:700;margin-bottom:.6rem">HTTPS required</div>
+    <div style="font-size:.82rem;color:#98989d;line-height:1.6;margin-bottom:1.25rem">
+      Camera access is only available on secure (HTTPS) connections.<br><br>
+      You are currently on <strong style="color:#ff9f0a">${location.protocol}//${location.host}</strong>.<br><br>
+      Please open this page via the <strong>ngrok HTTPS link</strong> instead of the local IP address.
+    </div>
+    <div style="font-size:.75rem;color:#3a3a3c;font-family:monospace">Expected: https://xxxx.ngrok-free.app/mobile/…</div>`;
+  document.querySelector('.content').prepend(el);
+}
+
+function _camError(err) {
+  if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+    alert('Camera permission denied. Please tap "Allow" when the browser asks, or enable camera access in your phone\'s browser settings, then reload.');
+  } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
+    alert('No camera found on this device.');
+  } else if (err.name === 'NotReadableError' || err.name === 'TrackStartError') {
+    alert('Camera is already in use by another app. Close it and try again.');
+  } else {
+    alert('Camera error: ' + err.message);
+  }
+}
+
+function _sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+function resetAll() { _stopAllStreams(); window.location.reload(); }
+
+/* ═══════════════════════════════════════════════════════════
+   Auto-start: open rear camera for ID Front as soon as the
+   page loads (HTTPS context confirmed at this point).
+═══════════════════════════════════════════════════════════ */
+window.addEventListener('DOMContentLoaded', () => {
+  if (_httpsRequired()) {
+    _showHttpsError();
+    return;
+  }
+  // Small delay so the browser has painted the UI before asking for permission
+  setTimeout(() => openDocCam('idFront'), 400);
+});
+</script>
+</body>
+</html>
