@@ -2,15 +2,21 @@
 Celery worker for async IDV tasks.
 On Windows run with: celery -A worker worker --pool=solo --loglevel=info
 
-Processing pipeline (Fast Path → Manual Gemma Gate):
+Processing pipeline (Fast Path → Manual VAV Gate):
   1. InsightFace  – face detection on left half of ID Front + face match vs best selfie
   2. MRZ parser   – pytesseract + regex OCR of ID Back, extracts DOB, verifies 18+
-  3. Gate         – if EITHER step 1 or 2 fails, task pauses as REQUIRES_GEMMA_CONFIRMATION
-  4. Gemma 4      – ONLY after explicit user confirmation via /verify/trigger-gemma/{task_id}
+  3. Gate         – if EITHER step 1 or 2 fails, task pauses as REQUIRES_VAV_CONFIRMATION
+  4. VAV System   – ONLY after explicit user confirmation via /verify/trigger-vav/{task_id}
                     • face failure → image enhancement then re-run InsightFace
-                    • MRZ failure  → Gemma OCR on ID Front for DOB
+                    • MRZ failure  → VAV System OCR on ID Front for DOB
+
+Country-specific extensions:
+  KR (South Korea) – PASS API stub; prioritises phone-based identity data
+  TH (Thailand)    – Laser ID format validation + API stub
+  JP (Japan)       – VAV prompt handles My Number card; Japanese era → Gregorian conversion
 """
 
+import json
 import logging
 import re
 from datetime import date, datetime
@@ -33,8 +39,63 @@ from config import settings
 logger = logging.getLogger(__name__)
 
 ENGINE_STATUS_KEY = "veritas_engine_status"
-# Redis key pattern for Gemma gate state: gemma_gate:{task_id} → JSON payload
-_GEMMA_GATE_KEY = "gemma_gate:{}"
+# Redis key pattern for VAV gate state: vav_gate:{task_id} → JSON payload
+_VAV_GATE_KEY = "vav_gate:{}"
+# Legacy alias so main.py import doesn't break during transition
+_GEMMA_GATE_KEY = _VAV_GATE_KEY
+
+# ── Manual Review Queue ───────────────────────────────────────────────────────
+# Redis key pattern for admin review payload: review_item:{task_id} → JSON
+# TTL: 24 hours — images are purged automatically if never actioned (GDPR §5(1)(e))
+_REVIEW_ITEM_KEY = "review_item:{}"
+_REVIEW_QUEUE_KEY = "review_queue"        # Redis list of task_ids awaiting admin action
+_REVIEW_IMAGE_TTL = 86_400               # 24 h in seconds
+
+
+def push_review_item(
+    task_id: str,
+    project: str,
+    country: str,
+    user_email: str,
+    reason: str,
+    id_front_hex: str,
+    id_back_hex: str,
+    selfie_hex: Optional[str],
+) -> None:
+    """
+    Store the minimum data needed for manual admin review in Redis with a 24 h TTL.
+    Images are stored as hex strings — never written to disk — and are deleted the
+    moment an admin actions the item (approve / reject) or TTL expires.
+    """
+    payload = json.dumps({
+        "task_id":      task_id,
+        "project":      project,
+        "country":      country,
+        "user_email":   user_email,
+        "reason":       reason,
+        "id_front_hex": id_front_hex,
+        "id_back_hex":  id_back_hex,
+        "selfie_hex":   selfie_hex,
+        "queued_at":    datetime.utcnow().isoformat(),
+    })
+    pipe = _redis.pipeline()
+    pipe.setex(_REVIEW_ITEM_KEY.format(task_id), _REVIEW_IMAGE_TTL, payload)
+    # Prepend to queue list so newest items appear first
+    pipe.lpush(_REVIEW_QUEUE_KEY, task_id)
+    pipe.execute()
+    logger.info("Review item queued | task=%s | project=%s", task_id, project)
+
+
+def delete_review_item(task_id: str) -> None:
+    """
+    Immediately purge review images from Redis — called after admin action.
+    Also removes the task_id from the queue list.
+    """
+    pipe = _redis.pipeline()
+    pipe.delete(_REVIEW_ITEM_KEY.format(task_id))
+    pipe.lrem(_REVIEW_QUEUE_KEY, 0, task_id)
+    pipe.execute()
+    logger.info("Review item purged | task=%s", task_id)
 
 _redis = redis_client.from_url(settings.redis_url, decode_responses=True)
 _redis.set(ENGINE_STATUS_KEY, "loading")
@@ -136,7 +197,7 @@ def _compare_faces(
 ) -> tuple[Optional[bool], Optional[float], Optional[bytes], bool]:
     """
     Returns (match, score, cropped_id_face_bytes, id_face_detected).
-    id_face_detected=False triggers the Gemma gate for face enhancement.
+    id_face_detected=False triggers the VAV gate for face enhancement.
     """
     face_app = _get_face_app()
 
@@ -149,7 +210,7 @@ def _compare_faces(
 
     id_face, cropped = _detect_id_face(id_img)
     if id_face is None:
-        logger.warning("No face detected on ID document left half — will trigger Gemma gate")
+        logger.warning("No face detected on ID document left half — will trigger VAV gate")
         return None, None, None, False
 
     cropped_bytes = _bgr_to_bytes(cropped) if cropped is not None else None
@@ -321,22 +382,12 @@ def _preprocess_for_mrz(img: np.ndarray) -> np.ndarray:
 
 
 def _retesseract_dob_segment(preprocessed: np.ndarray, dob_raw: str, pytesseract) -> str:
-    """Re-OCR only the 6-char DOB slice with digits-only whitelist.
-
-    Called when the first pass produced a dob_raw that contains letters.
-    Estimates the horizontal position of the DOB field by scanning for the
-    first row whose width matches an MRZ line and extracting the known offset.
-    Returns the corrected 6-char string, or the original if nothing improves.
-    """
+    """Re-OCR only the 6-char DOB slice with digits-only whitelist."""
     if dob_raw.isdigit():
         return dob_raw
 
     h, w = preprocessed.shape[:2]
-    # MRZ characters are roughly equal width; TD3 line is 44 chars, TD1 is 30.
-    # For TD3 line2: DOB starts at char 13, for TD1 line2: DOB starts at char 0.
-    # We attempt a narrow horizontal strip around where DOB digits should sit.
-    # Since we don't know TD type yet, try both offsets and keep the best hit.
-    char_w = w // 44  # approximate character width for TD3
+    char_w = w // 44
     for dob_start_char, line_len in [(13, 44), (0, 30)]:
         cw = w // line_len
         x1 = dob_start_char * cw
@@ -360,7 +411,7 @@ def _retesseract_dob_segment(preprocessed: np.ndarray, dob_raw: str, pytesseract
 def _run_fast_mrz(id_back_bytes: bytes) -> Optional[dict]:
     """
     Fast Path MRZ parser. Returns None if no valid DOB could be extracted,
-    which triggers the Gemma confirmation gate.
+    which triggers the VAV confirmation gate.
     """
     img = _bytes_to_bgr(id_back_bytes)
     if img is None:
@@ -394,12 +445,9 @@ def _run_fast_mrz(id_back_bytes: bytes) -> Optional[dict]:
             logger.info("MRZ TD-1 parsed via Fast Path")
             return result
 
-    # Second attempt: try mrz library if available
     try:
         from mrz.checker.td3 import TD3CodeChecker  # noqa: F401
         from mrz.checker.td1 import TD1CodeChecker  # noqa: F401
-        # The mrz library validates line-by-line; already tried regex above.
-        # If regex failed and mrz is installed we can try direct line feed.
         lines = [l for l in raw_text.splitlines() if len(l) >= 30]
         for i in range(len(lines) - 1):
             r = _extract_td3(lines[i], lines[i + 1])
@@ -416,12 +464,9 @@ def _run_fast_mrz(id_back_bytes: bytes) -> Optional[dict]:
     except Exception as exc:
         logger.warning("mrz library pass failed: %s", exc)
 
-    # Third attempt: digit-only re-OCR on the DOB segment for each candidate line.
-    # Fixes cases where Tesseract put letters in the YYMMDD field on the first pass.
     lines = [l for l in raw_text.splitlines() if len(l) >= 30]
     for i in range(len(lines) - 1):
         l2 = lines[i + 1]
-        # TD3: DOB at chars 13-18
         if len(l2) >= 44:
             raw_dob = l2[13:19]
             if not raw_dob.isdigit():
@@ -433,7 +478,6 @@ def _run_fast_mrz(id_back_bytes: bytes) -> Optional[dict]:
                     return r
     for i in range(len(lines) - 2):
         l2 = lines[i + 1]
-        # TD1: DOB at chars 0-5
         if len(l2) >= 30:
             raw_dob = l2[0:6]
             if not raw_dob.isdigit():
@@ -444,27 +488,24 @@ def _run_fast_mrz(id_back_bytes: bytes) -> Optional[dict]:
                     logger.info("MRZ TD-1 parsed via digit-only DOB re-pass")
                     return r
 
-    logger.warning("Fast Path MRZ: no valid DOB found — Gemma gate required")
+    logger.warning("Fast Path MRZ: no valid DOB found — VAV gate required")
     return None
 
 
 # ---------------------------------------------------------------------------
-# Gemma 4 helpers (only invoked after manual confirmation)
+# VAV System helpers (Veritas Advanced Verification System)
+# Only invoked after manual confirmation
 # ---------------------------------------------------------------------------
 
 def _enhance_image_for_face(id_front_bytes: bytes) -> bytes:
-    """
-    Light sharpening + contrast boost on ID Front so InsightFace gets a second chance.
-    """
+    """Light sharpening + contrast boost on ID Front so InsightFace gets a second chance."""
     img = _bytes_to_bgr(id_front_bytes)
     if img is None:
         return id_front_bytes
 
-    # Unsharp mask
     blur      = cv2.GaussianBlur(img, (0, 0), 3)
     sharpened = cv2.addWeighted(img, 1.6, blur, -0.6, 0)
 
-    # CLAHE on L channel
     lab = cv2.cvtColor(sharpened, cv2.COLOR_BGR2LAB)
     l, a, b = cv2.split(lab)
     clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
@@ -475,17 +516,24 @@ def _enhance_image_for_face(id_front_bytes: bytes) -> bytes:
     return result if result else id_front_bytes
 
 
-def _run_gemma_ocr(id_front_bytes: bytes) -> dict:
-    """Use Gemma 4 to extract DOB from ID Front image.
-
-    Calls verify_dob() which uses a focused prompt that explicitly instructs
-    the model to locate the 'Datum rojstva' / 'Date of birth' label on the
-    front of the document — more reliable than the generic OCR prompt.
+def _run_vav_ocr(id_front_bytes: bytes, country: str = "EU") -> dict:
     """
-    logger.warning("MRZ Fast Path failed — running Gemma 4 focused DOB extraction on ID Front")
+    Use the VAV System to extract DOB from ID Front image.
+    For Japan (JP): the prompt instructs the model to handle My Number cards
+    and convert Japanese eras (Reiwa/Heisei/Showa) to Gregorian dates.
+    Cost: 0.00€ (Internal Compute).
+    """
+    if country == "JP":
+        logger.warning("MRZ Fast Path failed — running VAV System (JP/My Number) on ID Front")
+    else:
+        logger.warning("MRZ Fast Path failed — running VAV System focused DOB extraction on ID Front")
+
     from engine import VeritasEngine
     engine = VeritasEngine()
     try:
+        # Pass country so the engine can adapt its prompt
+        if hasattr(engine, "verify_dob_country"):
+            return engine.verify_dob_country(id_front_bytes, country=country)
         return engine.verify_dob(id_front_bytes)
     finally:
         del engine
@@ -506,6 +554,69 @@ def _build_ocr_result_from_mrz(mrz: dict) -> dict:
             "mrz_type":        mrz.get("mrz_type"),
         },
         "ocr_source": "mrz_fast_path",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Country-specific verification helpers
+# ---------------------------------------------------------------------------
+
+# --- South Korea: PASS API stub ---
+def _run_pass_api_stub(project: str, task_id: str) -> dict:
+    """
+    Placeholder for the Korean PASS API (통신사 본인인증).
+    In production replace with a signed HTTP call to PASS (SKT/KT/LGU+).
+    Returns a dict with the same shape as ocr_result.
+    Logs a fixed cost per call.
+    """
+    logger.info("KR: PASS API stub invoked for project=%s task=%s", project, task_id)
+    try:
+        from cost_tracker import log_transaction
+        log_transaction(
+            task_id=task_id, project=project, country="KR",
+            cost_type="pass_api", status="success",
+            extra={"note": "PASS API stub — live integration pending"},
+        )
+    except Exception:
+        pass
+    return {
+        "status": "manual_review",
+        "user_name": "Unknown",
+        "age_verified": False,
+        "ocr_data": {"pass_api": "stub_ok"},
+        "ocr_source": "pass_api_stub",
+    }
+
+
+# --- Thailand: Laser ID format validator ---
+_LASER_ID_RE = re.compile(r"^[A-Z]{2}\d{7}[A-Z0-9]{2}$")
+
+
+def _validate_laser_id(laser_id: str) -> bool:
+    """
+    Thai Laser ID format: 2 uppercase letters + 7 digits + 2 alphanumeric chars.
+    Example: AB1234567C8
+    """
+    return bool(_LASER_ID_RE.match(laser_id.strip().upper()))
+
+
+def _run_laser_id_stub(laser_id: str, project: str, task_id: str) -> dict:
+    """Validate Laser ID format and call the API stub. Logs cost per call."""
+    valid = _validate_laser_id(laser_id)
+    logger.info("TH: Laser ID validation for project=%s valid=%s", project, valid)
+    try:
+        from cost_tracker import log_transaction
+        log_transaction(
+            task_id=task_id, project=project, country="TH",
+            cost_type="laser_id",
+            status="success" if valid else "failed",
+            extra={"laser_id_valid": valid},
+        )
+    except Exception:
+        pass
+    return {
+        "laser_id_valid": valid,
+        "laser_id_source": "format_validation",
     }
 
 
@@ -539,32 +650,62 @@ def verify_identity_task(
     self,
     id_front_bytes_hex: str,
     id_back_bytes_hex: str,
-    selfie_bytes_hex: Optional[str],          # best (straight) selfie frame
-    all_selfie_bytes_hex: Optional[list],     # all liveness frames (may be None for desktop)
+    selfie_bytes_hex: Optional[str],
+    all_selfie_bytes_hex: Optional[list],
     project: str,
     nfc_dob_iso: Optional[str] = None,
+    vav_authorized: bool = False,
+    vav_mode: Optional[str] = None,       # "face" | "mrz"
+    country: str = "EU",
+    laser_id: Optional[str] = None,       # Thailand Laser ID string
+    # Legacy aliases from old API callers
     gemma_authorized: bool = False,
-    gemma_mode: Optional[str] = None,         # "face" | "mrz" — set when re-triggered
+    gemma_mode: Optional[str] = None,
 ) -> dict:
     """
-    Fast Path → Manual Gemma Gate pipeline.
+    Fast Path → Manual VAV Gate pipeline.
 
-    On first call (gemma_authorized=False):
-      1. InsightFace face detection on left half of ID Front + selfie match
-      2. MRZ parser on ID Back
-      3. If either fails → store gate state in Redis, return REQUIRES_GEMMA_CONFIRMATION
+    On first call (vav_authorized=False):
+      1. Country-specific pre-checks (PASS for KR, Laser ID for TH)
+      2. InsightFace face detection on left half of ID Front + selfie match
+      3. MRZ parser on ID Back
+      4. If either step 2-3 fails → store gate state in Redis, return REQUIRES_VAV_CONFIRMATION
 
-    On re-trigger (gemma_authorized=True):
-      • gemma_mode="face" → enhance image, retry InsightFace
-      • gemma_mode="mrz"  → Gemma 4 OCR on ID Front for DOB
+    On re-trigger (vav_authorized=True):
+      • vav_mode="face" → enhance image, retry InsightFace
+      • vav_mode="mrz"  → VAV System OCR on ID Front for DOB (JP-aware)
 
     Arguments are hex-encoded so they survive JSON serialisation.
     """
-    logger.info("Starting IDV task for project: %s | gemma_authorized=%s", project, gemma_authorized)
+    # Support legacy field names from old API callers
+    if gemma_authorized and not vav_authorized:
+        vav_authorized = gemma_authorized
+    if gemma_mode and not vav_mode:
+        vav_mode = gemma_mode
+
+    logger.info(
+        "Starting IDV task | project=%s | country=%s | vav_authorized=%s",
+        project, country, vav_authorized,
+    )
+
+    task_id = self.request.id
 
     id_front_bytes: bytes = bytes.fromhex(id_front_bytes_hex)
     id_back_bytes:  bytes = bytes.fromhex(id_back_bytes_hex)
     selfie_bytes: Optional[bytes] = bytes.fromhex(selfie_bytes_hex) if selfie_bytes_hex else None
+
+    # ── Country pre-checks ──────────────────────────────────────────────────
+
+    country_extra: dict = {}
+
+    if country == "KR" and not vav_authorized:
+        # PASS API stub — logs its own cost
+        pass_result = _run_pass_api_stub(project, task_id)
+        country_extra["pass_api"] = pass_result.get("ocr_data", {})
+
+    if country == "TH" and laser_id:
+        laser_result = _run_laser_id_stub(laser_id, project, task_id)
+        country_extra["laser_id"] = laser_result
 
     # ── Step 1: Face comparison ─────────────────────────────────────────────
     face_match: Optional[bool]  = None
@@ -573,21 +714,22 @@ def verify_identity_task(
     id_face_detected = True
 
     if has_selfie:
-        if gemma_authorized and gemma_mode == "face":
-            # Re-run after Gemma enhancement
+        if vav_authorized and vav_mode == "face":
             enhanced_bytes = _enhance_image_for_face(id_front_bytes)
             face_match, face_score, _, id_face_detected = _compare_faces(enhanced_bytes, selfie_bytes)
-            logger.info("Gemma-enhanced face comparison: match=%s score=%s detected=%s",
-                        face_match, face_score, id_face_detected)
+            logger.info(
+                "VAV-enhanced face comparison: match=%s score=%s detected=%s",
+                face_match, face_score, id_face_detected,
+            )
         else:
             face_match, face_score, _, id_face_detected = _compare_faces(id_front_bytes, selfie_bytes)
 
     # ── Step 2: OCR / MRZ ──────────────────────────────────────────────────
     ocr_result: dict
     ocr_source: str
+    cost_type_used: str = "mrz_fast_path"
 
     if nfc_dob_iso:
-        # NFC path — trust the chip directly
         try:
             dob_obj = datetime.strptime(nfc_dob_iso, "%Y-%m-%d").date()
             age_verified = _is_18_plus(dob_obj)
@@ -601,6 +743,7 @@ def verify_identity_task(
                 },
             }
             ocr_source = "nfc_chip"
+            cost_type_used = "nfc"
             mrz_failed = False
             logger.info("NFC DOB: %s  age_ok=%s", nfc_dob_iso, age_verified)
         except ValueError:
@@ -615,22 +758,23 @@ def verify_identity_task(
         ocr_source = ""
 
     if not nfc_dob_iso:
-        if gemma_authorized and gemma_mode == "mrz":
-            # Gemma OCR on ID Front for DOB
-            ocr_result = _run_gemma_ocr(id_front_bytes)
-            ocr_source = "gemma4_fallback"
+        if vav_authorized and vav_mode == "mrz":
+            ocr_result = _run_vav_ocr(id_front_bytes, country=country)
+            ocr_source = "vav_system"
+            cost_type_used = "vav_system"
             mrz_failed = False
         else:
             mrz_data = _run_fast_mrz(id_back_bytes)
             if mrz_data is not None:
                 ocr_result = _build_ocr_result_from_mrz(mrz_data)
                 ocr_source = "mrz_fast_path"
+                cost_type_used = "mrz_fast_path"
                 mrz_failed = False
             else:
                 mrz_failed = True
 
-    # ── Step 3: Gemma gate check ────────────────────────────────────────────
-    if not gemma_authorized:
+    # ── Step 3: VAV gate check ──────────────────────────────────────────────
+    if not vav_authorized:
         failures = []
         if has_selfie and not id_face_detected:
             failures.append("face_detection_failed")
@@ -639,41 +783,52 @@ def verify_identity_task(
 
         if failures:
             reason_map = {
-                "face_detection_failed":    "InsightFace could not detect a face on the ID document (image too blurry or dark).",
+                "face_detection_failed":     "InsightFace could not detect a face on the ID document (image too blurry or dark).",
                 "mrz_dob_extraction_failed": "The MRZ parser could not extract a valid Date of Birth from the ID back.",
             }
             reason = " | ".join(reason_map[f] for f in failures)
-            gemma_mode_needed = "face" if "face_detection_failed" in failures else "mrz"
+            vav_mode_needed = "face" if "face_detection_failed" in failures else "mrz"
 
-            # Persist gate state so the trigger endpoint can resume
-            import json
             _redis.setex(
-                _GEMMA_GATE_KEY.format(self.request.id),
+                _VAV_GATE_KEY.format(task_id),
                 3600,
                 json.dumps({
-                    "id_front_hex":     id_front_bytes_hex,
-                    "id_back_hex":      id_back_bytes_hex,
-                    "selfie_hex":       selfie_bytes_hex,
-                    "all_selfie_hex":   all_selfie_bytes_hex,
-                    "project":          project,
-                    "nfc_dob_iso":      nfc_dob_iso,
-                    "gemma_mode":       gemma_mode_needed,
-                    "failures":         failures,
-                    "reason":           reason,
+                    "id_front_hex":   id_front_bytes_hex,
+                    "id_back_hex":    id_back_bytes_hex,
+                    "selfie_hex":     selfie_bytes_hex,
+                    "all_selfie_hex": all_selfie_bytes_hex,
+                    "project":        project,
+                    "nfc_dob_iso":    nfc_dob_iso,
+                    "vav_mode":       vav_mode_needed,
+                    "failures":       failures,
+                    "reason":         reason,
+                    "country":        country,
+                    "laser_id":       laser_id,
                 }),
             )
-            logger.warning("Gemma gate triggered | task=%s | failures=%s", self.request.id, failures)
+            logger.warning("VAV gate triggered | task=%s | failures=%s", task_id, failures)
 
-            # Update task state to custom value so the frontend can detect it
-            self.update_state(
-                state="REQUIRES_GEMMA_CONFIRMATION",
-                meta={"gemma_reason": reason, "failures": failures},
+            # Push images into the admin manual review queue (24 h TTL, GDPR-safe)
+            # user_email is unknown at worker level — admin can see project + task_id
+            push_review_item(
+                task_id=task_id,
+                project=project,
+                country=country,
+                user_email="",          # populated by client webhook if available
+                reason=reason,
+                id_front_hex=id_front_bytes_hex,
+                id_back_hex=id_back_bytes_hex,
+                selfie_hex=selfie_bytes_hex,
             )
-            # Return a sentinel — Celery stores this as the task result while state is custom
+
+            self.update_state(
+                state="REQUIRES_VAV_CONFIRMATION",
+                meta={"vav_reason": reason, "failures": failures},
+            )
             return {
-                "status":       "requires_gemma_confirmation",
-                "gemma_reason": reason,
-                "failures":     failures,
+                "status":     "requires_vav_confirmation",
+                "vav_reason": reason,
+                "failures":   failures,
             }
 
     # ── Step 4: Final status ────────────────────────────────────────────────
@@ -693,10 +848,26 @@ def verify_identity_task(
         "ocr_data":     ocr_result.get("ocr_data", {}),
         "ocr_source":   ocr_source,
         "project":      project,
+        "country":      country,
+        **({k: v for k, v in country_extra.items()} if country_extra else {}),
     }
 
+    # ── Cost tracking ───────────────────────────────────────────────────────
+    try:
+        from cost_tracker import log_transaction
+        log_transaction(
+            task_id=task_id,
+            project=project,
+            country=country,
+            cost_type=cost_type_used,  # type: ignore[arg-type]
+            status=status if status in ("success", "failed", "manual_review") else "success",
+            extra={"ocr_source": ocr_source, "face_match": face_match},
+        )
+    except Exception:
+        logger.exception("Failed to log cost transaction for task %s", task_id)
+
     logger.info(
-        "IDV task done | project=%s | status=%s | face_match=%s | source=%s",
-        project, result["status"], result["face_match"], ocr_source,
+        "IDV task done | project=%s | country=%s | status=%s | face_match=%s | source=%s",
+        project, country, result["status"], result["face_match"], ocr_source,
     )
     return result

@@ -16,6 +16,7 @@ onnxruntime>=1.18.0
 qrcode[pil]>=7.4
 streamlit>=1.35.0
 requests>=2.32.0
+httpx>=0.27.0
 # llama-cpp-python – install manually with pre-built wheel for Windows:
 # pip install llama-cpp-python --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu
 # mrz – optional fast MRZ library (recommended):

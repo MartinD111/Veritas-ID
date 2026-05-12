@@ -1,0 +1,710 @@
+<!DOCTYPE html>
+<html lang="sl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Veritas ID | Upravljalska Plošča</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Urbanist:wght@400;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-black: #000000;
+            --card-gray: #121214;
+            --accent-blue: #007AFF;
+        }
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--bg-black);
+            color: #ffffff;
+            scroll-behavior: smooth;
+        }
+        h1, h2, h3 { font-family: 'Urbanist', sans-serif; }
+
+        .glass-card {
+            background: rgba(18, 18, 20, 0.7);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 24px;
+        }
+
+        .nav-item.active {
+            background: rgba(0, 122, 255, 0.1);
+            color: var(--accent-blue);
+            border-right: 3px solid var(--accent-blue);
+        }
+
+        .pulse-dot {
+            animation: pulse 2s infinite;
+        }
+        @keyframes pulse {
+            0%   { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(52, 199, 89, 0.7); }
+            70%  { transform: scale(1);    box-shadow: 0 0 0 10px rgba(52, 199, 89, 0); }
+            100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(52, 199, 89, 0); }
+        }
+
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 10px; }
+
+        /* QR code image generated via canvas */
+        #qr-canvas-wrap canvas { border-radius: 1rem; }
+
+        /* Spinner */
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .spin { animation: spin 1s linear infinite; }
+
+        /* Task row fade-in */
+        @keyframes fadeInDown {
+            from { opacity: 0; transform: translateY(-8px); }
+            to   { opacity: 1; transform: translateY(0); }
+        }
+        .fade-in { animation: fadeInDown 0.3s ease forwards; }
+
+        /* Badge colours */
+        .badge-green  { background: rgba(52,199,89,0.12);  color: #34c759; }
+        .badge-orange { background: rgba(255,159,10,0.12); color: #ff9f0a; }
+        .badge-red    { background: rgba(255,59,48,0.12);  color: #ff3b30; }
+        .badge-blue   { background: rgba(0,122,255,0.12);  color: #007AFF; }
+    </style>
+</head>
+<body class="flex min-h-screen overflow-hidden">
+
+<!-- ── SIDEBAR ─────────────────────────────────────────────────────────── -->
+<aside class="w-64 border-r border-white/10 flex flex-col p-6 bg-black shrink-0">
+    <div class="flex items-center gap-3 mb-12">
+        <div class="w-10 h-10 bg-blue-600 rounded-xl flex items-center justify-center shadow-lg shadow-blue-500/20">
+            <i data-lucide="shield-check" class="text-white w-6 h-6"></i>
+        </div>
+        <span class="text-xl font-bold tracking-tight">Veritas <span class="text-blue-500">ID</span></span>
+    </div>
+
+    <nav class="space-y-2 flex-grow">
+        <button onclick="switchTab('overview')" id="nav-overview"
+            class="nav-item active w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200 hover:bg-white/5">
+            <i data-lucide="layout-dashboard" class="w-5 h-5"></i>
+            <span class="font-medium">Pregled</span>
+        </button>
+        <button onclick="switchTab('sessions')" id="nav-sessions"
+            class="nav-item w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200 hover:bg-white/5">
+            <i data-lucide="qr-code" class="w-5 h-5"></i>
+            <span class="font-medium">QR Seje</span>
+        </button>
+        <button onclick="switchTab('tasks')" id="nav-tasks"
+            class="nav-item w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200 hover:bg-white/5">
+            <i data-lucide="list-checks" class="w-5 h-5"></i>
+            <span class="font-medium">Aktivne Naloge</span>
+        </button>
+        <button onclick="switchTab('api')" id="nav-api"
+            class="nav-item w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200 hover:bg-white/5">
+            <i data-lucide="key" class="w-5 h-5"></i>
+            <span class="font-medium">API Ključi</span>
+        </button>
+    </nav>
+
+    <div class="mt-auto pt-6 border-t border-white/10">
+        <button onclick="switchTab('settings')" id="nav-settings"
+            class="nav-item w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200 hover:bg-white/5">
+            <i data-lucide="settings" class="w-5 h-5"></i>
+            <span class="font-medium">Nastavitve</span>
+        </button>
+    </div>
+</aside>
+
+<!-- ── MAIN ─────────────────────────────────────────────────────────────── -->
+<main class="flex-grow overflow-y-auto custom-scrollbar bg-[#080808] p-8">
+
+    <!-- HEADER -->
+    <header class="flex justify-between items-center mb-10">
+        <div>
+            <h1 id="tab-title" class="text-3xl font-bold tracking-tight">Pregled sistema</h1>
+            <p id="tab-subtitle" class="text-gray-400 mt-1">Dobrodošli nazaj, Martin. Vsi sistemi delujejo normalno.</p>
+        </div>
+        <div class="flex items-center gap-4">
+            <div id="engine-badge" class="flex items-center gap-3 bg-white/5 px-4 py-2 rounded-full border border-white/10">
+                <div class="w-2 h-2 rounded-full bg-yellow-500"></div>
+                <span class="text-sm font-medium text-gray-300">Gemma 4.0: Checking…</span>
+            </div>
+            <div class="w-10 h-10 bg-gray-800 rounded-full flex items-center justify-center border border-white/10">
+                <span class="text-xs font-bold text-blue-500">M</span>
+            </div>
+        </div>
+    </header>
+
+    <!-- ── OVERVIEW TAB ───────────────────────────────────────────────────── -->
+    <div id="tab-overview" class="tab-content space-y-8">
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-6">
+            <div class="glass-card p-6">
+                <p class="text-gray-400 text-sm font-medium uppercase tracking-wider mb-2">Verifikacije danes</p>
+                <h3 id="stat-verifications" class="text-3xl font-bold">—</h3>
+                <p class="text-green-500 text-xs mt-2 font-semibold">↑ Live podatki</p>
+            </div>
+            <div class="glass-card p-6">
+                <p class="text-gray-400 text-sm font-medium uppercase tracking-wider mb-2">Uspešnost AI</p>
+                <h3 class="text-3xl font-bold">98.4%</h3>
+                <p class="text-blue-500 text-xs mt-2 font-semibold">Gemma 4 Optimized</p>
+            </div>
+            <div class="glass-card p-6">
+                <p class="text-gray-400 text-sm font-medium uppercase tracking-wider mb-2">Povprečen čas</p>
+                <h3 class="text-3xl font-bold">1.2s</h3>
+                <p class="text-gray-500 text-xs mt-2 font-semibold">On-premise processing</p>
+            </div>
+            <div class="glass-card p-6">
+                <p class="text-gray-400 text-sm font-medium uppercase tracking-wider mb-2">Aktivne seje</p>
+                <h3 id="stat-sessions" class="text-3xl font-bold">—</h3>
+                <p class="text-orange-500 text-xs mt-2 font-semibold">Live na mobilnih napravah</p>
+            </div>
+        </div>
+
+        <!-- Recent Activity -->
+        <div class="glass-card overflow-hidden">
+            <div class="p-6 border-b border-white/5 flex justify-between items-center">
+                <h3 class="text-xl font-bold">Zadnje dejavnosti</h3>
+                <button onclick="switchTab('tasks')" class="text-blue-500 text-sm font-semibold hover:underline">Poglej vse</button>
+            </div>
+            <div class="overflow-x-auto">
+                <table class="w-full text-left">
+                    <thead class="bg-white/5 text-gray-400 text-xs uppercase font-bold">
+                        <tr>
+                            <th class="px-6 py-4">Task ID</th>
+                            <th class="px-6 py-4">Status</th>
+                            <th class="px-6 py-4">Projekt</th>
+                            <th class="px-6 py-4">Čas</th>
+                        </tr>
+                    </thead>
+                    <tbody id="activity-tbody" class="divide-y divide-white/5">
+                        <tr>
+                            <td colspan="4" class="px-6 py-8 text-center text-gray-500 text-sm">Nalaganje…</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── SESSIONS TAB ───────────────────────────────────────────────────── -->
+    <div id="tab-sessions" class="tab-content hidden space-y-8">
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-8">
+
+            <!-- QR generator panel -->
+            <div class="glass-card p-8 flex flex-col items-center justify-center text-center">
+                <h3 class="text-2xl font-bold mb-2">Nova QR Seja</h3>
+                <p class="text-gray-400 mb-6 text-sm max-w-xs">Skenirajte to kodo s pametnim telefonom za varen vnos dokumentov in biometrijo.</p>
+
+                <!-- API key input (shown when no key stored) -->
+                <div id="apikey-section" class="w-full mb-6 hidden">
+                    <label class="block text-xs text-gray-400 uppercase tracking-wider mb-2 text-left">API Ključ</label>
+                    <input id="api-key-input" type="password" placeholder="vrt_…"
+                        class="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm font-mono text-gray-200 focus:outline-none focus:border-blue-500/50 focus:ring-2 focus:ring-blue-500/20 transition-all">
+                </div>
+
+                <!-- QR display area -->
+                <div id="qr-display" class="mb-6">
+                    <!-- Placeholder icon before generation -->
+                    <div id="qr-placeholder" class="bg-white/5 border border-white/10 rounded-3xl w-64 h-64 flex items-center justify-center">
+                        <i data-lucide="qr-code" class="w-24 h-24 text-gray-600"></i>
+                    </div>
+                    <!-- Canvas injected here by JS after generation -->
+                    <div id="qr-canvas-wrap" class="hidden"></div>
+                </div>
+
+                <div id="qr-url-row" class="w-full mb-4 hidden">
+                    <div id="qr-url-box" class="bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-xs font-mono text-gray-400 truncate text-left"></div>
+                    <p id="qr-expires-label" class="text-xs text-gray-500 mt-2"></p>
+                </div>
+
+                <button id="gen-qr-btn" onclick="generateNewQR()"
+                    class="w-full bg-blue-600 hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold py-4 rounded-2xl transition-all shadow-lg shadow-blue-500/30">
+                    Ustvari novo sejo
+                </button>
+                <p id="qr-error" class="text-red-400 text-xs mt-3 hidden"></p>
+            </div>
+
+            <!-- Info / instructions -->
+            <div class="space-y-6">
+                <div class="glass-card p-6">
+                    <h4 class="font-bold mb-4 flex items-center gap-2">
+                        <i data-lucide="info" class="w-4 h-4 text-blue-500"></i> Navodila za mobilni tok
+                    </h4>
+                    <ol class="space-y-4 text-sm text-gray-300">
+                        <li class="flex gap-3"><span class="w-6 h-6 bg-white/5 rounded-full flex items-center justify-center text-xs font-bold shrink-0">1</span> Odprite kamero na telefonu.</li>
+                        <li class="flex gap-3"><span class="w-6 h-6 bg-white/5 rounded-full flex items-center justify-center text-xs font-bold shrink-0">2</span> Slikajte dokument (Spredaj/Zadaj).</li>
+                        <li class="flex gap-3"><span class="w-6 h-6 bg-white/5 rounded-full flex items-center justify-center text-xs font-bold shrink-0">3</span> Opravite Face-ID preverjanje živosti.</li>
+                        <li class="flex gap-3"><span class="w-6 h-6 bg-white/5 rounded-full flex items-center justify-center text-xs font-bold shrink-0">4</span> Počakajte na potrditev na tem zaslonu.</li>
+                    </ol>
+                </div>
+                <div class="glass-card p-6" style="background:rgba(0,122,255,0.04);border-color:rgba(0,122,255,0.15);">
+                    <h4 class="font-bold mb-2">Varnostni protokol</h4>
+                    <p class="text-sm text-gray-400">Vsaka seja poteče po 10 minutah. Podatki se med prenosom šifrirajo (E2EE) in obdelujejo izključno v RAM pomnilniku.</p>
+                </div>
+                <!-- ngrok status -->
+                <div id="ngrok-status-card" class="glass-card p-4 hidden">
+                    <p id="ngrok-status-text" class="text-sm"></p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── TASKS TAB ──────────────────────────────────────────────────────── -->
+    <div id="tab-tasks" class="tab-content hidden space-y-4">
+        <div id="tasks-empty" class="glass-card p-12 text-center">
+            <i data-lucide="loader-2" class="w-12 h-12 text-blue-500 spin mx-auto mb-6"></i>
+            <h3 class="text-2xl font-bold">Ni aktivnih nalog</h3>
+            <p class="text-gray-400 mt-2">Ko bo uporabnik skeniral QR kodo, se bo pojavil tukaj.</p>
+        </div>
+        <div id="tasks-list" class="space-y-3 hidden"></div>
+    </div>
+
+    <!-- ── API TAB ────────────────────────────────────────────────────────── -->
+    <div id="tab-api" class="tab-content hidden space-y-8">
+        <div class="glass-card p-8">
+            <div class="flex justify-between items-center mb-8">
+                <h3 class="text-2xl font-bold">Upravljanje API Ključev</h3>
+                <!-- admin-only: create key -->
+                <button onclick="openCreateKeyModal()"
+                    class="bg-blue-600 px-6 py-3 rounded-xl font-bold hover:bg-blue-500 transition-all text-sm">
+                    + Ustvari nov ključ
+                </button>
+            </div>
+            <div id="api-keys-list" class="space-y-4">
+                <p class="text-gray-500 text-sm">Nalaganje…</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── SETTINGS TAB ───────────────────────────────────────────────────── -->
+    <div id="tab-settings" class="tab-content hidden space-y-8">
+        <div class="glass-card p-8 max-w-lg">
+            <h3 class="text-2xl font-bold mb-8">Nastavitve</h3>
+
+            <label class="block text-xs text-gray-400 uppercase tracking-wider mb-2">API Ključ</label>
+            <input id="settings-api-key" type="password" placeholder="vrt_…"
+                class="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm font-mono text-gray-200 focus:outline-none focus:border-blue-500/50 focus:ring-2 focus:ring-blue-500/20 transition-all mb-1">
+            <p class="text-xs text-gray-500 mb-8">Ključ se shranjuje lokalno v brskalniku.</p>
+
+            <button onclick="saveSettings()"
+                class="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-4 rounded-2xl transition-all">
+                Shrani
+            </button>
+            <p id="settings-saved-msg" class="text-green-500 text-xs text-center mt-3 hidden">✓ Shranjeno</p>
+        </div>
+    </div>
+
+</main>
+
+<!-- ── CREATE KEY MODAL ──────────────────────────────────────────────────── -->
+<div id="create-key-modal" class="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 hidden flex items-center justify-center">
+    <div class="glass-card p-8 w-full max-w-sm mx-4">
+        <h3 class="text-xl font-bold mb-6">Nov API Ključ</h3>
+
+        <label class="block text-xs text-gray-400 uppercase tracking-wider mb-2">Admin Token</label>
+        <input id="modal-admin-token" type="password" placeholder="admin_token"
+            class="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm font-mono text-gray-200 focus:outline-none focus:border-blue-500/50 mb-4 transition-all">
+
+        <label class="block text-xs text-gray-400 uppercase tracking-wider mb-2">Ime projekta</label>
+        <input id="modal-project-name" type="text" placeholder="npr. main-production"
+            class="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-gray-200 focus:outline-none focus:border-blue-500/50 mb-6 transition-all">
+
+        <p id="modal-new-key" class="font-mono text-xs text-green-400 bg-green-500/5 border border-green-500/20 rounded-xl px-4 py-3 mb-4 break-all hidden"></p>
+        <p id="modal-error" class="text-red-400 text-xs mb-4 hidden"></p>
+
+        <div class="flex gap-3">
+            <button onclick="closeCreateKeyModal()"
+                class="flex-1 bg-white/5 hover:bg-white/10 text-gray-300 font-bold py-3 rounded-xl transition-all">
+                Zapri
+            </button>
+            <button onclick="createApiKey()"
+                class="flex-1 bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 rounded-xl transition-all">
+                Ustvari
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- ── QR lib (lightweight, no dependencies) ─────────────────────────────── -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+
+<script>
+// ── Config ────────────────────────────────────────────────────────────────
+const API_BASE = window.location.origin; // same origin as FastAPI
+
+// ── State ─────────────────────────────────────────────────────────────────
+let _apiKey      = localStorage.getItem('vrt_api_key') || '';
+let _trackedTasks = new Map(); // task_id → {state, project, ts}
+let _pollingTimer = null;
+let _ngrokUrl    = null;
+
+// ── Init ──────────────────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', async () => {
+    lucide.createIcons();
+    await bootstrapApiKey();
+    loadPersistedKey();
+    pollEngineStatus();
+    pollActiveTasks();
+    setInterval(pollEngineStatus, 15_000);
+    setInterval(pollActiveTasks, 5_000);
+    setInterval(updateOverviewStats, 10_000);
+    fetchNgrokUrl();
+});
+
+// ── Auto-load API key + ngrok from backend config ────────────────────────
+async function bootstrapApiKey() {
+    try {
+        const r = await fetch(`${API_BASE}/dashboard-config`);
+        if (!r.ok) return;
+        const d = await r.json();
+        if (d.api_key && !_apiKey) {
+            _apiKey = d.api_key;
+            localStorage.setItem('vrt_api_key', d.api_key);
+        }
+        if (d.ngrok_url) {
+            _ngrokUrl = d.ngrok_url;
+            showNgrokStatus(true);
+        }
+    } catch (_) {}
+}
+
+// ── Persist API key ───────────────────────────────────────────────────────
+function loadPersistedKey() {
+    const settingsInput = document.getElementById('settings-api-key');
+    if (_apiKey) {
+        if (settingsInput) settingsInput.value = _apiKey;
+        document.getElementById('apikey-section').classList.add('hidden');
+    } else {
+        document.getElementById('apikey-section').classList.remove('hidden');
+    }
+}
+
+function saveSettings() {
+    const val = document.getElementById('settings-api-key').value.trim();
+    if (val) {
+        _apiKey = val;
+        localStorage.setItem('vrt_api_key', val);
+        document.getElementById('apikey-section').classList.add('hidden');
+    }
+    const msg = document.getElementById('settings-saved-msg');
+    msg.classList.remove('hidden');
+    setTimeout(() => msg.classList.add('hidden'), 2500);
+}
+
+// ── Tab switching ─────────────────────────────────────────────────────────
+const TAB_META = {
+    overview: { title: 'Pregled sistema',  sub: 'Dobrodošli nazaj, Martin. Vsi sistemi delujejo normalno.' },
+    sessions: { title: 'Mobilne Seje',     sub: 'Upravljajte QR kode in povezave za stranke.' },
+    tasks:    { title: 'Aktivne Naloge',   sub: 'Spremljanje AI procesiranja v realnem času.' },
+    api:      { title: 'API Dostop',       sub: 'Integrirajte Veritas ID v vašo programsko opremo.' },
+    settings: { title: 'Nastavitve',       sub: 'Konfigurirajte parametre verifikacije.' },
+};
+
+function switchTab(tabId) {
+    document.querySelectorAll('.tab-content').forEach(t => t.classList.add('hidden'));
+    document.getElementById(`tab-${tabId}`).classList.remove('hidden');
+
+    document.querySelectorAll('.nav-item').forEach(b => b.classList.remove('active'));
+    document.getElementById(`nav-${tabId}`).classList.add('active');
+
+    const m = TAB_META[tabId] || {};
+    document.getElementById('tab-title').innerText    = m.title || tabId;
+    document.getElementById('tab-subtitle').innerText = m.sub   || '';
+
+    if (tabId === 'api')      refreshApiKeys();
+    if (tabId === 'overview') updateOverviewStats();
+}
+
+// ── Engine status ─────────────────────────────────────────────────────────
+async function pollEngineStatus() {
+    try {
+        const r = await fetch(`${API_BASE}/engine-status`);
+        const d = await r.json();
+        const badge = document.getElementById('engine-badge');
+        const dotEl = badge.querySelector('div');
+        const txtEl = badge.querySelector('span');
+
+        if (d.status === 'ready') {
+            dotEl.className = 'w-2 h-2 rounded-full bg-green-500 pulse-dot';
+            txtEl.textContent = 'Gemma 4.0: Ready';
+        } else if (d.status === 'loading') {
+            dotEl.className = 'w-2 h-2 rounded-full bg-yellow-500';
+            txtEl.textContent = 'Gemma 4.0: Nalaganje…';
+        } else {
+            dotEl.className = 'w-2 h-2 rounded-full bg-red-500';
+            txtEl.textContent = 'Gemma 4.0: Nedosegljiv';
+        }
+    } catch (_) {
+        const badge = document.getElementById('engine-badge');
+        badge.querySelector('div').className = 'w-2 h-2 rounded-full bg-red-500';
+        badge.querySelector('span').textContent = 'API: Offline';
+    }
+}
+
+// ── Ngrok detection (via backend to avoid CORS) ───────────────────────────
+async function fetchNgrokUrl() {
+    if (_ngrokUrl) return; // already set by bootstrapApiKey
+    try {
+        const r = await fetch(`${API_BASE}/dashboard-config`);
+        if (!r.ok) { showNgrokStatus(false); return; }
+        const d = await r.json();
+        if (d.ngrok_url) {
+            _ngrokUrl = d.ngrok_url;
+            showNgrokStatus(true);
+        } else {
+            showNgrokStatus(false);
+        }
+    } catch (_) {
+        showNgrokStatus(false);
+    }
+}
+
+function showNgrokStatus(ok) {
+    const card = document.getElementById('ngrok-status-card');
+    const text = document.getElementById('ngrok-status-text');
+    card.classList.remove('hidden');
+    if (ok) {
+        text.innerHTML = `<span class="text-green-500 font-semibold">✓ ngrok zaznan:</span> <span class="font-mono text-xs text-gray-300">${_ngrokUrl}</span>`;
+    } else {
+        text.innerHTML = `<span class="text-orange-400 font-semibold">⚠ ngrok ni zaznan.</span> <span class="text-gray-400 text-xs">Zaženi <code>ngrok http 8000</code> za javni HTTPS dostop.</span>`;
+    }
+}
+
+// ── QR generation ─────────────────────────────────────────────────────────
+async function generateNewQR() {
+    const key = _apiKey || document.getElementById('api-key-input')?.value.trim();
+    if (!key) {
+        showQrError('Najprej vnesite API ključ.');
+        return;
+    }
+
+    const btn = document.getElementById('gen-qr-btn');
+    btn.textContent = 'Generiranje…';
+    btn.disabled = true;
+    hideQrError();
+
+    try {
+        // 1. Create session on backend
+        const resp = await fetch(`${API_BASE}/mobile/session`, {
+            method: 'POST',
+            headers: { 'X-API-Key': key },
+        });
+        if (!resp.ok) {
+            const err = await resp.json().catch(() => ({}));
+            throw new Error(err.detail || `HTTP ${resp.status}`);
+        }
+        const { session_id, expires_in } = await resp.json();
+
+        // 2. Build mobile URL
+        const baseUrl = _ngrokUrl || API_BASE;
+        const mobileUrl = `${baseUrl}/mobile/${session_id}`;
+
+        // 3. Render QR with qrcode.js
+        const wrap = document.getElementById('qr-canvas-wrap');
+        wrap.innerHTML = '';
+        new QRCode(wrap, {
+            text: mobileUrl,
+            width: 256, height: 256,
+            colorDark: '#000000',
+            colorLight: '#ffffff',
+            correctLevel: QRCode.CorrectLevel.M,
+        });
+
+        document.getElementById('qr-placeholder').classList.add('hidden');
+        wrap.classList.remove('hidden');
+
+        // 4. Show URL & expiry
+        document.getElementById('qr-url-box').textContent = mobileUrl;
+        document.getElementById('qr-expires-label').textContent =
+            `Seja poteče čez ${Math.round(expires_in / 60)} minut · ID: ${session_id.slice(0, 12)}…`;
+        document.getElementById('qr-url-row').classList.remove('hidden');
+
+        // 5. Track this session as a task
+        if (key !== _apiKey) {
+            _apiKey = key;
+            localStorage.setItem('vrt_api_key', key);
+        }
+
+    } catch (e) {
+        showQrError(`Napaka: ${e.message}`);
+    } finally {
+        btn.textContent = 'Ustvari novo sejo';
+        btn.disabled = false;
+    }
+}
+
+function showQrError(msg) {
+    const el = document.getElementById('qr-error');
+    el.textContent = msg;
+    el.classList.remove('hidden');
+}
+function hideQrError() {
+    document.getElementById('qr-error').classList.add('hidden');
+}
+
+// ── Active tasks polling ───────────────────────────────────────────────────
+async function pollActiveTasks() {
+    // Poll all tracked tasks for status updates
+    if (_trackedTasks.size === 0) {
+        showEmptyTasks();
+        return;
+    }
+
+    for (const [taskId, info] of _trackedTasks) {
+        try {
+            const r = await fetch(`${API_BASE}/verify/status/${taskId}`);
+            if (!r.ok) continue;
+            const d = await r.json();
+            _trackedTasks.set(taskId, { ...info, state: d.state, result: d.result });
+        } catch (_) {}
+    }
+    renderTaskList();
+    renderActivityTable();
+}
+
+function renderTaskList() {
+    const list = document.getElementById('tasks-list');
+    const empty = document.getElementById('tasks-empty');
+
+    if (_trackedTasks.size === 0) { showEmptyTasks(); return; }
+
+    empty.classList.add('hidden');
+    list.classList.remove('hidden');
+    list.innerHTML = '';
+
+    for (const [taskId, info] of [..._trackedTasks].reverse()) {
+        const badgeCls = stateBadge(info.state);
+        const row = document.createElement('div');
+        row.className = 'glass-card p-5 flex justify-between items-center fade-in';
+        row.innerHTML = `
+            <div>
+                <div class="font-mono text-sm text-gray-200">${taskId.slice(0, 16)}…</div>
+                <div class="text-xs text-gray-500 mt-1">${info.project || '—'}  ·  ${timeAgo(info.ts)}</div>
+            </div>
+            <span class="px-3 py-1 rounded-full text-xs font-bold ${badgeCls}">${stateLabel(info.state)}</span>
+        `;
+        list.appendChild(row);
+    }
+}
+
+function showEmptyTasks() {
+    document.getElementById('tasks-empty').classList.remove('hidden');
+    document.getElementById('tasks-list').classList.add('hidden');
+}
+
+function renderActivityTable() {
+    const tbody = document.getElementById('activity-tbody');
+    if (_trackedTasks.size === 0) {
+        tbody.innerHTML = '<tr><td colspan="4" class="px-6 py-8 text-center text-gray-500 text-sm">Ni zabeleženih dejavnosti.</td></tr>';
+        return;
+    }
+    tbody.innerHTML = '';
+    for (const [taskId, info] of [..._trackedTasks].reverse().slice(0, 8)) {
+        const badgeCls = stateBadge(info.state);
+        const tr = document.createElement('tr');
+        tr.className = 'hover:bg-white/5 transition-colors';
+        tr.innerHTML = `
+            <td class="px-6 py-4 font-mono text-xs text-gray-300">${taskId.slice(0, 14)}…</td>
+            <td class="px-6 py-4"><span class="px-3 py-1 rounded-full text-xs font-bold ${badgeCls}">${stateLabel(info.state)}</span></td>
+            <td class="px-6 py-4 text-sm text-gray-300">${info.project || '—'}</td>
+            <td class="px-6 py-4 text-sm text-gray-400">${timeAgo(info.ts)}</td>
+        `;
+        tbody.appendChild(tr);
+    }
+}
+
+// Expose for mobile.html to register a new task (cross-tab via localStorage)
+window.addEventListener('storage', e => {
+    if (e.key === 'vrt_new_task' && e.newValue) {
+        try {
+            const { task_id, project } = JSON.parse(e.newValue);
+            registerTask(task_id, project);
+        } catch (_) {}
+    }
+});
+
+function registerTask(taskId, project) {
+    _trackedTasks.set(taskId, { state: 'PENDING', project, ts: Date.now() });
+    renderTaskList();
+    renderActivityTable();
+}
+
+// ── Overview stats ─────────────────────────────────────────────────────────
+async function updateOverviewStats() {
+    // Count completed tasks
+    let done = 0, active = 0;
+    for (const [, info] of _trackedTasks) {
+        if (['SUCCESS', 'FAILURE'].includes(info.state)) done++;
+        else active++;
+    }
+    document.getElementById('stat-verifications').textContent = done || '0';
+    document.getElementById('stat-sessions').textContent      = active || '0';
+}
+
+// ── API Keys tab ──────────────────────────────────────────────────────────
+async function refreshApiKeys() {
+    const container = document.getElementById('api-keys-list');
+    container.innerHTML = '<p class="text-gray-500 text-sm">Za pregled ključev je potreben Admin Token.</p>';
+}
+
+function openCreateKeyModal() {
+    document.getElementById('create-key-modal').classList.remove('hidden');
+    document.getElementById('modal-new-key').classList.add('hidden');
+    document.getElementById('modal-error').classList.add('hidden');
+}
+function closeCreateKeyModal() {
+    document.getElementById('create-key-modal').classList.add('hidden');
+}
+
+async function createApiKey() {
+    const token   = document.getElementById('modal-admin-token').value.trim();
+    const project = document.getElementById('modal-project-name').value.trim();
+    const errEl   = document.getElementById('modal-error');
+    const keyEl   = document.getElementById('modal-new-key');
+
+    errEl.classList.add('hidden');
+    keyEl.classList.add('hidden');
+
+    if (!token || !project) {
+        errEl.textContent = 'Izpolnite oba polji.';
+        errEl.classList.remove('hidden');
+        return;
+    }
+
+    try {
+        const r = await fetch(`${API_BASE}/admin/api-keys`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-Admin-Token': token },
+            body: JSON.stringify({ project }),
+        });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.detail || `HTTP ${r.status}`);
+        keyEl.textContent = `${d.api_key}  ← shrani, prikazan enkrat!`;
+        keyEl.classList.remove('hidden');
+    } catch (e) {
+        errEl.textContent = `Napaka: ${e.message}`;
+        errEl.classList.remove('hidden');
+    }
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────
+function stateBadge(state) {
+    if (!state || state === 'PENDING' || state === 'STARTED') return 'badge-blue';
+    if (state === 'SUCCESS') return 'badge-green';
+    if (state === 'FAILURE') return 'badge-red';
+    if (state === 'REQUIRES_GEMMA_CONFIRMATION') return 'badge-orange';
+    return 'badge-blue';
+}
+function stateLabel(state) {
+    const map = {
+        PENDING: 'V vrsti', STARTED: 'Procesiranje', SUCCESS: 'Potrjeno',
+        FAILURE: 'Napaka', REQUIRES_GEMMA_CONFIRMATION: 'Gemma pregled',
+    };
+    return map[state] || state || '—';
+}
+function timeAgo(ts) {
+    if (!ts) return '—';
+    const sec = Math.round((Date.now() - ts) / 1000);
+    if (sec < 60)  return `Pred ${sec}s`;
+    if (sec < 3600) return `Pred ${Math.round(sec/60)} min`;
+    return `Pred ${Math.round(sec/3600)} h`;
+}
+</script>
+</body>
+</html>

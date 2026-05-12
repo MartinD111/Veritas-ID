@@ -36,6 +36,18 @@ class Settings(BaseSettings):
     # --- Celery naloge ---
     task_time_limit_seconds: int = 300
 
+    # --- API Cost Tracking ---
+    # Fixed cost per PASS API call (South Korea), in EUR
+    pass_api_cost_eur: float = 0.05
+    # VAV System (internal compute) — always 0.00€; field kept for config completeness
+    vav_compute_cost_eur: float = 0.00
+    # Laser ID validation stub cost (Thailand)
+    laser_id_cost_eur: float = 0.02
+
+    # --- Supported Countries ---
+    # Comma-separated list of enabled country codes
+    enabled_countries: str = "EU,KR,TH,JP"
+
     def llm_path_absolute(self) -> Path:
         """Vrne absolutno pot do LLM modela, relativno na koren projekta."""
         p = Path(self.llm_model_path)
